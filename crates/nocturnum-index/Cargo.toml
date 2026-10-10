@@ -13,3 +13,11 @@ workspace = true
 
 [dependencies]
 nocturnum-core.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "flat"
+harness = false
