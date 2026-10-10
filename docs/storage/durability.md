@@ -48,9 +48,29 @@ Seeds are printed, and `NOCTURNUM_CRASH_SEED=<seed>` replays a run.
 
 A mutation check was done by hand when the harness was written: with recovery's tail truncation removed, two of the crash tests fail.
 
+## Shard crash tests
+
+`crates/nocturnum-storage/tests/shard_crash.rs` covers the whole shard, the memtable, flushes, segments, the manifest and recovery, which [`../decisions/0002-storage-layout.md`](../decisions/0002-storage-layout.md) describes.
+
+A child process applies a deterministic stream of mixed operations (upserts, deletes and every payload change) from one thread with `durable` acknowledgements, flushing every 25 operations, and the parent regenerates the same stream. Because one writer only starts an operation after the previous one was acknowledged, the reopened shard must hold exactly the result of every acknowledged operation, or of those plus the one in flight, and the test checks that point by point.
+
+It runs 20 random kills on one shard directory, which checks 400 to 500 acknowledged operations, and kills the child at every step of a flush:
+
+| Crash point | Leaves behind |
+|---|---|
+| `segment.built_not_renamed` | a complete segment in a temporary directory |
+| `shard.flush.segment_published` | a segment in place that no manifest lists yet |
+| `manifest.tmp_written` | a new manifest written beside the old one but not swapped in |
+| `shard.flush.manifest_written` | a published flush whose WAL records are not truncated yet |
+| `wal.truncate.removed_unsynced` | a WAL truncation whose removal was never synced |
+
+A crash while the shard is first created leaves no shard, since nothing was acknowledged, and creating it again works.
+
+A mutation check was done by hand: truncating the WAL before writing the manifest, the classic ordering bug, fails both shard crash tests with a corruption error naming the missing records.
+
 ## Unit tests
 
-`crates/nocturnum-storage/src/wal/tests.rs` covers what a crash test reaches only by chance:
+`crates/nocturnum-storage/src/wal/tests.rs` covers what a crash test reaches only by chance in the WAL:
 
 - a log cut at every byte offset recovers exactly the whole records before the cut,
 - garbage after the last record, and records spliced in from another log with the same history, are both rejected,
@@ -59,6 +79,8 @@ A mutation check was done by hand when the harness was written: with recovery's 
 - injected fsync failures poison the log and are never retried into a false success,
 - a second handle on the same directory is refused,
 - a property test runs random appends, syncs, reopens and truncations against an in-memory model.
+
+The segment and manifest tests flip every single bit of every file and check that loading refuses each one, and the shard's property test runs random writes, flushes and reopens against a plain in-memory model.
 
 ## What these tests do not prove
 

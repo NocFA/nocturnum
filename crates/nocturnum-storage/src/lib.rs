@@ -2,8 +2,14 @@
 
 mod crash;
 pub mod error;
+pub mod manifest;
+pub mod op;
+mod segment;
+pub mod shard;
 mod sync;
 pub mod wal;
 
 pub use error::{Error, Result};
+pub use op::{Operation, PointWrite};
+pub use shard::{PointRef, Record, Shard, ShardOptions, ShardRecovery, View, WriteError};
 pub use wal::{Recovery, Wal, WalOptions};

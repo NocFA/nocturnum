@@ -28,6 +28,9 @@ pub enum Error {
     )]
     Poisoned,
 
+    #[error("{0}")]
+    Invalid(String),
+
     #[error("{} is already open in another process or handle", dir.display())]
     Locked { dir: PathBuf },
 

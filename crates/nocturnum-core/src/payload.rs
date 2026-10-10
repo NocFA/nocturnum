@@ -18,6 +18,26 @@ impl Payload {
         Self::default()
     }
 
+    /// Checks the payload nests no deeper than [`MAX_PAYLOAD_DEPTH`], which every payload must
+    /// pass before it is stored, since JSON readers refuse documents nested much deeper.
+    pub fn validate(&self) -> Result<()> {
+        fn depth_ok(v: &Value, depth: usize) -> bool {
+            match v {
+                _ if depth > MAX_PAYLOAD_DEPTH => false,
+                Value::Array(items) => items.iter().all(|i| depth_ok(i, depth + 1)),
+                Value::Object(map) => map.values().all(|i| depth_ok(i, depth + 1)),
+                _ => true,
+            }
+        }
+        if self.0.values().all(|v| depth_ok(v, 2)) {
+            Ok(())
+        } else {
+            Err(Error::PayloadTooDeep {
+                max: MAX_PAYLOAD_DEPTH,
+            })
+        }
+    }
+
     /// Every value the path reaches, in document order, empty when the path is missing.
     pub fn values_at<'a>(&'a self, path: &JsonPath) -> Vec<&'a Value> {
         path.resolve_in(&self.0)
@@ -29,6 +49,9 @@ impl From<Map<String, Value>> for Payload {
         Payload(map)
     }
 }
+
+/// How deeply a payload may nest objects and arrays, counting the payload itself as 1.
+pub const MAX_PAYLOAD_DEPTH: usize = 64;
 
 /// The deepest path a filter or index may address.
 pub const MAX_PATH_DEPTH: usize = 32;
@@ -238,6 +261,22 @@ mod tests {
         assert!(p.values_at(&path("missing")).is_empty());
         // No implicit descent into arrays.
         assert!(p.values_at(&path("items.price")).is_empty());
+    }
+
+    #[test]
+    fn payload_depth_is_limited() {
+        let mut v = json!(1);
+        for _ in 0..MAX_PAYLOAD_DEPTH - 1 {
+            v = json!([v]);
+        }
+        assert!(payload(json!({"k": v.clone()})).validate().is_err());
+        let inner = v.as_array().unwrap()[0].clone();
+        assert!(payload(json!({"k": inner})).validate().is_ok());
+        assert!(
+            payload(json!({"a": {"b": [1, {"c": null}]}}))
+                .validate()
+                .is_ok()
+        );
     }
 
     #[test]

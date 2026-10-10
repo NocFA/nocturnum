@@ -18,6 +18,9 @@ pub enum Error {
     #[error("invalid filter at {at}: {reason}")]
     InvalidFilter { at: String, reason: String },
 
+    #[error("payloads may nest at most {max} levels deep")]
+    PayloadTooDeep { max: usize },
+
     #[error("invalid collection config: {0}")]
     InvalidConfig(String),
 }
