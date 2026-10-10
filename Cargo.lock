@@ -203,6 +203,7 @@ dependencies = [
  "crc32c",
  "libc",
  "nocturnum-core",
+ "nocturnum-storage",
  "proptest",
  "tempfile",
  "thiserror",

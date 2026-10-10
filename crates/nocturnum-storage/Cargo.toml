@@ -11,15 +11,21 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Named crash points for the crash tests, see src/crash.rs, inert unless the
+# NOCTURNUM_CRASH_AT variable is set.
+crash-points = []
+
 [dependencies]
 nocturnum-core.workspace = true
 crc32c.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 
-[target.'cfg(target_vendor = "apple")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
 [dev-dependencies]
+nocturnum-storage = { path = ".", features = ["crash-points"] }
 proptest.workspace = true
 tempfile.workspace = true

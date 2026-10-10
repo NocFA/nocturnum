@@ -6,7 +6,7 @@ It follows the shape of [Qdrant](https://qdrant.tech/) (collections, points, pay
 
 **Status:** early engine work, with the core types, the filter language and the write-ahead log written and tested, and nothing to run yet beyond `cargo run` printing the version.
 
-The filter semantics are defined in `crates/nocturnum-core/src/filter.rs` and the WAL's on-disk format and durability contract in `crates/nocturnum-storage/src/wal.rs`.
+The filter semantics are defined in `crates/nocturnum-core/src/filter.rs`, the WAL's on-disk format in `crates/nocturnum-storage/src/wal.rs`, and what each write acknowledgement promises, with the crash tests behind it, in [`docs/storage/durability.md`](docs/storage/durability.md).
 
 ## Why
 

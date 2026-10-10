@@ -76,6 +76,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use crate::crash::crash_point;
 use crate::error::{Error, IoContext, Result};
 use crate::sync::{create_dir_all_durable, sync_dir, sync_file};
 
@@ -419,8 +420,14 @@ fn create_segment(dir: &Path, first_seq: u64) -> Result<Segment> {
         .create_new(true)
         .open(&path)
         .ctx(|| format!("creating {}", path.display()))?;
-    file.write_all(&encode_header(seed, first_seq))
+    let header = encode_header(seed, first_seq);
+    crash_point("wal.segment.created", || {});
+    crash_point("wal.segment.half_header", || {
+        let _ = (&file).write_all(&header[..HEADER_LEN as usize / 2]);
+    });
+    file.write_all(&header)
         .ctx(|| format!("writing the header of {}", path.display()))?;
+    crash_point("wal.segment.header_unsynced", || {});
     sync_file(&file).ctx(|| format!("syncing {}", path.display()))?;
     sync_dir(dir).ctx(|| format!("syncing {}", dir.display()))?;
     Ok(Segment {
@@ -514,6 +521,7 @@ impl Wal {
                     truncated_bytes = on_disk - s.valid_len;
                     file.set_len(s.valid_len)
                         .ctx(|| format!("truncating {}", s.path.display()))?;
+                    crash_point("wal.open.repaired_unsynced", || {});
                 }
                 // What recovery read may only have been in the page cache, sync it so the
                 // recovered state is durable before anything new is acknowledged.
@@ -635,6 +643,9 @@ impl Wal {
         buf.extend_from_slice(&crc.to_le_bytes());
         buf.extend_from_slice(&seq.to_le_bytes());
         buf.extend_from_slice(payload);
+        crash_point("wal.append.torn", || {
+            let _ = (&*w.current.file).write_all(&buf[..buf.len() / 2]);
+        });
         if let Err(e) = (&*w.current.file).write_all(&buf) {
             // Part of the record may be in the file now, recovery will cut it off.
             self.poison();
@@ -766,6 +777,7 @@ impl Wal {
                 Err(e) if e.kind() == ErrorKind::NotFound => {}
                 Err(e) => return Err(e).ctx(|| format!("removing {}", path.display())),
             }
+            crash_point("wal.truncate.removed_unsynced", || {});
             sync_dir(&self.dir).ctx(|| format!("syncing {}", self.dir.display()))?;
             let mut w = lock(&self.writer);
             debug_assert_eq!(w.closed.first().map(|c| &c.1), Some(path));
