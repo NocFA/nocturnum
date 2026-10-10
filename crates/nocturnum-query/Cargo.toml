@@ -1,0 +1,17 @@
+[package]
+name = "nocturnum-query"
+description = "Filter planning, query execution, scoring and fusion"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+nocturnum-core.workspace = true
+nocturnum-index.workspace = true
+nocturnum-storage.workspace = true

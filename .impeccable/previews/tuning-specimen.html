@@ -1,0 +1,800 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Search quality · notes-768 · nocturnum</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,200..800&family=Instrument+Sans:wdth,wght@75..100,400..700&family=Martian+Mono:wdth,wght@75..112.5,300..600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #fafafa;
+    --ink: #0a0a0a;
+    --accent: #ff4f00;
+    --ink-2: #4a4a48;
+    --ink-3: #8a8a86;
+    --rule: #e4e4e1;
+    --rule-2: #d2d2ce;
+    --wash: #f1f1ef;
+    --display: "Bricolage Grotesque", "Arial Narrow", sans-serif;
+    --text: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
+    --mono: "Martian Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    --ease: cubic-bezier(.2, .7, .2, 1);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--text);
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    font-variant-numeric: tabular-nums;
+    overflow: hidden;
+  }
+  ::selection { background: var(--accent); color: var(--paper); }
+  .mono {
+    font-family: var(--mono);
+    font-variation-settings: "wdth" 82;
+    font-size: 10.5px;
+    letter-spacing: 0;
+    font-weight: 400;
+  }
+  button { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---------- app frame ---------- */
+  .frame {
+    height: 52px;
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    padding: 0 40px;
+    border-bottom: 1px solid var(--ink);
+  }
+  .wordmark {
+    display: flex; align-items: center; gap: 9px;
+    font-family: var(--display);
+    font-variation-settings: "opsz" 24, "wdth" 90, "wght" 760;
+    font-size: 23px;
+    letter-spacing: -0.02em;
+    text-decoration: none; color: var(--ink);
+    line-height: 1;
+    padding-bottom: 2px;
+  }
+  .wordmark svg { display: block; }
+  .switcher {
+    display: flex; align-items: center; gap: 10px;
+    height: 30px; padding: 0 10px 0 12px;
+    border: 1px solid var(--rule-2);
+    background: var(--paper);
+    cursor: pointer;
+  }
+  .switcher:hover { border-color: var(--ink); }
+  .switcher b { font-weight: 600; font-size: 13px; }
+  .switcher .mono { color: var(--ink-3); }
+  .chev {
+    width: 6px; height: 6px;
+    border-right: 1.5px solid var(--ink); border-bottom: 1.5px solid var(--ink);
+    transform: translateY(-2px) rotate(45deg);
+    margin-left: 2px;
+  }
+  nav { display: flex; gap: 2px; height: 100%; }
+  nav a {
+    display: flex; align-items: center;
+    padding: 0 12px;
+    color: var(--ink-2);
+    text-decoration: none;
+    font-size: 13.5px;
+    position: relative;
+  }
+  nav a:hover { color: var(--ink); }
+  nav a[aria-current="page"] { color: var(--ink); font-weight: 600; }
+  nav a[aria-current="page"]::after {
+    content: ""; position: absolute; left: 12px; right: 12px; bottom: -1px;
+    height: 3px; background: var(--accent);
+  }
+  .frame .spacer { flex: 1; }
+  .tag {
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    padding: 4px 8px 3px;
+    text-transform: lowercase;
+    white-space: nowrap;
+  }
+
+  /* ---------- page ---------- */
+  main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 584px;
+    gap: 64px;
+    padding: 30px 40px 0;
+    height: calc(100vh - 52px);
+    min-height: 0;
+  }
+  .left { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .titlebar { display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap; }
+  h1 {
+    margin: 0;
+    font-size: 21px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.1;
+  }
+  .meta { color: var(--ink-3); }
+  .lede { margin: 8px 0 0; color: var(--ink-2); max-width: 62ch; font-size: 13.5px; }
+
+  /* ---------- specimen ---------- */
+  .specimen {
+    position: relative;
+    margin-top: 18px;
+    border-top: 1px solid var(--ink);
+    padding-top: 10px;
+    flex: 0 0 auto;
+  }
+  .spec-head { display: flex; justify-content: space-between; color: var(--ink-2); }
+  .spec-head .axis-name { color: var(--ink); }
+  .spec-head .axis-name i { font-style: normal; color: var(--accent); }
+  .glyph-wrap {
+    position: relative;
+    height: 340px;
+    overflow: hidden;
+  }
+  .guide {
+    position: absolute; left: 0; right: 0; height: 0;
+    border-top: 1px solid var(--rule);
+    pointer-events: none;
+  }
+  .guide span {
+    position: absolute; right: 0; top: -15px;
+    color: var(--ink-3);
+    background: var(--paper);
+    padding-left: 6px;
+    z-index: 2;
+  }
+  .guide { z-index: 2; }
+  .guide.base { border-top-color: var(--rule-2); }
+  .glyph {
+    position: relative;
+    margin: 0;
+    font-family: var(--display);
+    font-size: 420px;
+    line-height: 420px;
+    height: 420px;
+    letter-spacing: -0.012em;
+    white-space: nowrap;
+    font-variation-settings: "opsz" 96, "wdth" 90, "wght" 600;
+    transition: font-variation-settings 220ms var(--ease);
+    margin-left: 0;
+    user-select: text;
+  }
+  .glyph .unit {
+    font-variation-settings: "opsz" 96, "wdth" 75, "wght" 300;
+    color: var(--accent);
+    letter-spacing: 0;
+    margin-left: 0.04em;
+  }
+  .coords {
+    display: flex; gap: 22px; flex-wrap: wrap;
+    padding: 8px 0 0;
+    border-top: 1px solid var(--ink);
+    color: var(--ink-2);
+  }
+  .coords b { color: var(--ink); font-weight: 500; }
+  .coords .tracks { color: var(--ink-3); }
+
+  /* ---------- axes / sliders ---------- */
+  .axes { margin-top: 8px; }
+  .axis {
+    display: grid;
+    grid-template-columns: 176px minmax(0, 1fr) 76px;
+    align-items: center;
+    column-gap: 20px;
+    padding: 8px 0 8px;
+    border-bottom: 1px solid var(--rule);
+    position: relative;
+  }
+  .axis::before {
+    content: ""; position: absolute; left: -16px; top: 50%;
+    width: 6px; height: 6px; margin-top: -3px;
+    background: var(--accent);
+    opacity: 0; transform: scale(.4);
+    transition: opacity 160ms var(--ease), transform 160ms var(--ease);
+  }
+  .axis.is-active::before { opacity: 1; transform: none; }
+  .axis label { display: flex; flex-direction: column; line-height: 1.25; cursor: pointer; }
+  .axis label b { font-weight: 600; font-size: 13.5px; }
+  .axis label .mono { color: var(--ink-3); }
+  .axis output {
+    text-align: right;
+    font-family: var(--mono);
+    font-variation-settings: "wdth" 82;
+    font-size: 15px;
+    font-weight: 500;
+  }
+  .axis.is-active output { color: var(--accent); }
+  .track-col { position: relative; }
+  .ticks {
+    position: relative; height: 15px; margin-top: 3px;
+    color: var(--ink-3);
+  }
+  .ticks span {
+    position: absolute; top: 0;
+    transform: translateX(-50%);
+    white-space: nowrap;
+  }
+  .ticks span:first-child { transform: none; }
+  .ticks span:last-child { transform: translateX(-100%); }
+  .ticks span.on { color: var(--ink); }
+
+  input[type="range"] {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; height: 22px; margin: 0;
+    background: transparent;
+    cursor: pointer;
+    --p: 50%;
+  }
+  input[type="range"]::-webkit-slider-runnable-track {
+    height: 22px;
+    background:
+      linear-gradient(var(--ink), var(--ink)) 0 50% / var(--p) 2px no-repeat,
+      linear-gradient(var(--rule-2), var(--rule-2)) 0 50% / 100% 1px no-repeat;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 3px; height: 22px;
+    background: var(--ink);
+    border: 0; border-radius: 0;
+    box-shadow: 0 0 0 4px var(--paper);
+  }
+  .axis.is-active input[type="range"]::-webkit-slider-thumb { background: var(--accent); width: 4px; }
+  input[type="range"]::-moz-range-track { height: 1px; background: var(--rule-2); }
+  input[type="range"]::-moz-range-progress { height: 2px; background: var(--ink); }
+  input[type="range"]::-moz-range-thumb {
+    width: 3px; height: 22px; border: 0; border-radius: 0;
+    background: var(--ink); box-shadow: 0 0 0 4px var(--paper);
+  }
+  .axis.is-active input[type="range"]::-moz-range-thumb { background: var(--accent); width: 4px; }
+  input[type="range"]:focus-visible { outline: none; }
+  input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--paper), 0 0 0 6px var(--accent); }
+  input[type="range"]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 4px var(--paper), 0 0 0 6px var(--accent); }
+
+  .request {
+    margin-top: 16px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  .request code {
+    flex: 1; min-width: 0;
+    padding: 8px 12px;
+    background: var(--wash);
+    line-height: 1.6;
+    color: var(--ink-2);
+  }
+  .request code em { font-style: normal; color: var(--ink); font-weight: 500; }
+  .btn {
+    height: 34px; padding: 0 14px;
+    border: 1px solid var(--ink);
+    background: var(--ink); color: var(--paper);
+    font-size: 13px; font-weight: 600;
+    cursor: pointer; white-space: nowrap;
+  }
+  .btn:hover { background: var(--accent); border-color: var(--accent); }
+  .btn.ghost { background: transparent; color: var(--ink); }
+  .btn.ghost:hover { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+
+  /* ---------- right column ---------- */
+  .right { display: flex; flex-direction: column; min-height: 0; }
+  .query {
+    display: flex; align-items: center; gap: 12px;
+    height: 40px; padding: 0 12px;
+    border: 1px solid var(--ink);
+  }
+  .query .q { flex: 1; font-size: 15px; font-weight: 500; }
+  .query .q::before { content: "\201C"; color: var(--ink-3); }
+  .query .q::after { content: "\201D"; color: var(--ink-3); }
+  .query .mono { color: var(--ink-3); }
+
+  .readouts {
+    display: grid;
+    grid-template-columns: 1.35fr 1fr 1fr;
+    margin-top: 18px;
+    border-bottom: 1px solid var(--ink);
+  }
+  .readout { padding: 0 0 12px; }
+  .readout + .readout { padding-left: 18px; border-left: 1px solid var(--rule); }
+  .readout .k { color: var(--ink-2); display: flex; gap: 8px; align-items: baseline; }
+  .readout .v {
+    font-family: var(--mono);
+    font-variation-settings: "wdth" 78;
+    font-weight: 400;
+    font-size: 40px;
+    line-height: 1.05;
+    letter-spacing: -0.03em;
+    margin-top: 4px;
+  }
+  .readout .v small { font-size: 13px; letter-spacing: 0; color: var(--ink-3); margin-left: 4px; }
+  .readout .sub { color: var(--ink-3); margin-top: 2px; }
+  .readout .sub b { color: var(--accent); font-weight: 500; }
+  .meter {
+    position: relative; height: 4px; margin-top: 8px; background: var(--rule);
+  }
+  .meter i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--ink); transition: width 220ms var(--ease); }
+  .meter u { position: absolute; top: -3px; width: 1px; height: 10px; background: var(--ink-3); }
+
+  .grid-head, .row {
+    display: grid;
+    grid-template-columns: 26px 58px minmax(0, 1fr) 150px 52px 34px;
+    column-gap: 12px;
+    align-items: center;
+  }
+  .grid-head {
+    padding: 12px 0 6px 10px;
+    color: var(--ink-3);
+    border-bottom: 1px solid var(--rule-2);
+  }
+  .grid-head span:nth-child(5), .grid-head span:nth-child(6) { text-align: right; }
+  .rows {
+    position: relative;
+    flex: 0 1 auto; min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--rule-2) transparent;
+  }
+  .rows::-webkit-scrollbar { width: 8px; }
+  .rows::-webkit-scrollbar-track { background: transparent; }
+  .rows::-webkit-scrollbar-thumb { background: var(--rule-2); border: 2px solid var(--paper); }
+  .rows::-webkit-scrollbar-thumb:hover { background: var(--ink-3); }
+  .row {
+    height: 27px;
+    padding-left: 10px;
+    border-bottom: 1px solid var(--rule);
+    position: relative;
+    background: var(--paper);
+  }
+  .row:hover { background: var(--wash); }
+  .row .rk, .row .id, .row .src, .row .sc, .row .dl {
+    font-family: var(--mono);
+    font-variation-settings: "wdth" 80;
+    font-size: 10.5px;
+  }
+  .row .rk { color: var(--ink-3); }
+  .row .id { color: var(--ink-2); }
+  .row .tt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+  .row .src { color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .sc { text-align: right; color: var(--ink); }
+  .row .dl { text-align: right; color: var(--ink-3); }
+  .row.off::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent);
+  }
+  .row.off .rk, .row.off .tt { color: var(--accent); }
+  .row.off .dl { color: var(--accent); }
+
+  .missed {
+    padding: 10px 0 14px;
+    border-top: 1px solid var(--ink);
+    color: var(--ink-2);
+    min-height: 44px;
+  }
+  .missed b { color: var(--ink); font-weight: 500; }
+  .missed .x { color: var(--accent); }
+
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none !important; animation: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<header class="frame">
+  <a class="wordmark" href="#" aria-label="nocturnum home">
+    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+      <circle cx="10" cy="10" r="9" fill="#ff4f00"/>
+      <circle cx="13" cy="8.4" r="8" fill="#0a0a0a"/>
+    </svg>
+    nocturnum
+  </a>
+  <button class="switcher" type="button" aria-haspopup="listbox" aria-label="Collection notes-768, switch collection">
+    <b>notes-768</b><span class="mono">48,210 pts</span><span class="chev" aria-hidden="true"></span>
+  </button>
+  <nav aria-label="Console">
+    <a href="#">Collections</a>
+    <a href="#">Points</a>
+    <a href="#">Query</a>
+    <a href="#" aria-current="page">Search quality</a>
+    <a href="#">Snapshots</a>
+    <a href="#">Keys</a>
+  </nav>
+  <span class="spacer"></span>
+  <span class="tag mono">synthetic demo data</span>
+</header>
+
+<main>
+  <section class="left" aria-labelledby="page-title">
+    <div class="titlebar">
+      <h1 id="page-title">Search quality</h1>
+      <span class="meta mono">48,210 points · 768-d cosine · hnsw m=16 ef_construct=100 · int8 scalar, rescore on</span>
+    </div>
+    <p class="lede">Drag a slider to trade latency for recall, every number on this page is measured against an exact scan of the same query.</p>
+
+    <div class="specimen" aria-live="polite">
+      <div class="spec-head mono">
+        <span class="axis-name" id="spec-name">hnsw_ef <i>/</i> search beam width</span>
+        <span id="spec-range">16 to 512, log scale</span>
+      </div>
+      <div class="glyph-wrap" id="glyph-wrap">
+        <div class="guide cap" id="g-cap"><span class="mono">figure height</span></div>
+        <div class="guide base" id="g-base"><span class="mono">baseline</span></div>
+        <p class="glyph" id="glyph">64</p>
+      </div>
+      <div class="coords mono" id="coords">
+        <span>wght <b id="c-wght">660</b> <span class="tracks">tracks recall</span></span>
+        <span>wdth <b id="c-wdth">88</b> <span class="tracks">tracks p50</span></span>
+        <span>opsz <b>96</b></span>
+        <span>ef <b id="c-ef">64</b></span>
+        <span>os <b id="c-os">1.0</b></span>
+        <span>k <b id="c-k">12</b></span>
+      </div>
+    </div>
+
+    <div class="axes" id="axes">
+      <div class="axis is-active" data-axis="ef">
+        <label for="r-ef"><b>ef</b><span class="mono">params.hnsw_ef</span></label>
+        <div class="track-col">
+          <input id="r-ef" type="range" min="0" max="500" step="1" value="200" aria-describedby="ef-ticks">
+          <div class="ticks mono" id="ef-ticks"></div>
+        </div>
+        <output id="o-ef" for="r-ef">64</output>
+      </div>
+      <div class="axis" data-axis="os">
+        <label for="r-os"><b>oversampling</b><span class="mono">quantization.oversampling</span></label>
+        <div class="track-col">
+          <input id="r-os" type="range" min="1" max="4" step="0.1" value="1">
+          <div class="ticks mono"><span style="left:0">1.0</span><span style="left:33.333%">2.0</span><span style="left:66.667%">3.0</span><span style="left:100%">4.0</span></div>
+        </div>
+        <output id="o-os" for="r-os">1.0×</output>
+      </div>
+      <div class="axis" data-axis="limit">
+        <label for="r-limit"><b>limit</b><span class="mono">limit</span></label>
+        <div class="track-col">
+          <input id="r-limit" type="range" min="1" max="50" step="1" value="12">
+          <div class="ticks mono"><span style="left:0">1</span><span style="left:18.367%">10</span><span style="left:38.775%">20</span><span style="left:59.184%">30</span><span style="left:79.592%">40</span><span style="left:100%">50</span></div>
+        </div>
+        <output id="o-limit" for="r-limit">12</output>
+      </div>
+    </div>
+
+    <div class="request">
+      <code class="mono" id="req"></code>
+      <button class="btn ghost" type="button" id="copy">Copy request</button>
+      <button class="btn" type="button">Save as default</button>
+    </div>
+  </section>
+
+  <section class="right" aria-label="Results for the test query">
+    <div class="query">
+      <span class="q">how does group commit work</span>
+      <span class="mono">embedded, 768-d</span>
+    </div>
+
+    <div class="readouts">
+      <div class="readout">
+        <div class="k mono">recall@10 <span>vs exact</span></div>
+        <div class="v" id="v-recall">0.968</div>
+        <div class="meter" aria-hidden="true"><i id="m-recall"></i></div>
+        <div class="sub mono" id="s-recall">0.32 of 10 neighbours missed</div>
+      </div>
+      <div class="readout">
+        <div class="k mono">p50</div>
+        <div class="v"><span id="v-p50">2.1</span><small>ms</small></div>
+        <div class="sub mono" id="s-p50">at 1 concurrent query</div>
+      </div>
+      <div class="readout">
+        <div class="k mono">p99</div>
+        <div class="v"><span id="v-p99">6.7</span><small>ms</small></div>
+        <div class="sub mono" id="s-qps">476 qps per core</div>
+      </div>
+    </div>
+
+    <div class="grid-head mono" aria-hidden="true">
+      <span>#</span><span>id</span><span>title</span><span>source</span><span>score</span><span>exact</span>
+    </div>
+    <div class="rows" id="rows" role="list"></div>
+    <div class="missed mono" id="missed"></div>
+  </section>
+</main>
+
+<script>
+(() => {
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // ---------- lookup tables ----------
+  const EF  = [16, 32, 64, 128, 256, 512];
+  const REC = [0.871, 0.934, 0.968, 0.987, 0.994, 0.997];
+  const P50 = [0.9, 1.4, 2.1, 3.1, 5.2, 9.0];
+
+  function interp(ef, arr) {
+    const x = Math.log2(ef / 16);
+    const i = Math.max(0, Math.min(4, Math.floor(x)));
+    const t = Math.max(0, Math.min(1, x - i));
+    return arr[i] + (arr[i + 1] - arr[i]) * t;
+  }
+  function model(ef, os) {
+    const base = interp(ef, REC);
+    const recall = 1 - (1 - base) * Math.pow(0.7, os - 1);
+    const p50 = interp(ef, P50) * (0.6 + 0.4 * os);
+    return { recall, p50, p99: p50 * 3.2 };
+  }
+
+  // ---------- synthetic corpus, exact ranking for the query ----------
+  const named = [
+    ["Group commit notes", "notes/storage/wal.md"],
+    ["WAL fsync levels", "notes/storage/wal.md"],
+    ["Segment publish protocol", "notes/storage/segments.md"],
+    ["Batching writes behind one fsync", "notes/storage/wal.md"],
+    ["Crash test harness", "notes/ops/crash-tests.md"],
+    ["Write-ahead log record format", "notes/storage/wal-format.md"],
+    ["Raft is only for metadata", "notes/cluster/raft.md"],
+    ["Durability modes in the config", "notes/config/durability.md"],
+    ["Flush scheduler and backpressure", "notes/storage/flush.md"],
+    ["Recovery replays the WAL tail", "notes/storage/recovery.md"],
+    ["Commit latency budget", "notes/perf/budgets.md"],
+    ["Optimizer merges small segments", "notes/storage/optimizer.md"],
+    ["Snapshot creation while writing", "notes/ops/snapshots.md"],
+    ["Payload index rebuild on restart", "notes/index/payload.md"],
+    ["Shard transfer over gRPC", "notes/cluster/transfer.md"],
+    ["Torn writes and checksums", "notes/storage/wal-format.md"],
+    ["Memtable size limits", "notes/storage/flush.md"],
+    ["Why we dropped mmap for the WAL", "notes/storage/wal.md"],
+    ["Io_uring experiment results", "notes/perf/io.md"],
+    ["Deletes are tombstones until merge", "notes/storage/optimizer.md"],
+    ["Consistency levels for reads", "notes/cluster/consistency.md"],
+    ["Version vectors per segment", "notes/storage/segments.md"],
+    ["Disk full behaviour", "notes/ops/disk.md"],
+    ["Write throughput on a small x86 box", "notes/perf/homelab.md"],
+    ["Upsert path end to end", "notes/api/upsert.md"],
+    ["Idempotency keys for batch upserts", "notes/api/upsert.md"],
+    ["Fsync on macOS lies", "notes/storage/platform.md"],
+    ["Compaction priority queue", "notes/storage/optimizer.md"],
+    ["Quantized vector storage layout", "notes/index/quant.md"],
+    ["HNSW graph persistence", "notes/index/hnsw.md"],
+    ["Replica catch-up after partition", "notes/cluster/replicas.md"],
+    ["Lock ordering in the collection", "notes/storage/locks.md"],
+    ["Bench: 1M upserts with wait=true", "notes/perf/bench.md"],
+    ["Points API error codes", "notes/api/errors.md"],
+    ["Backpressure signals to clients", "notes/api/limits.md"],
+    ["Metrics for the write path", "notes/ops/metrics.md"],
+    ["Off-site backups of the data dir", "notes/ops/backups.md"],
+    ["Bloom filters on ids", "notes/index/ids.md"],
+    ["Segment file naming", "notes/storage/segments.md"],
+    ["Cold start time by collection size", "notes/perf/startup.md"],
+    ["Payload schema changes", "notes/api/payload.md"],
+    ["Rate limits per API key", "notes/api/keys.md"],
+    ["Rescore cost with int8", "notes/index/quant.md"],
+    ["Filtering during graph search", "notes/index/filters.md"],
+    ["Sparse vectors plan", "notes/index/sparse.md"],
+    ["Distance functions and SIMD", "notes/index/distance.md"],
+    ["Tracing a slow query", "notes/ops/tracing.md"],
+    ["Collection aliases", "notes/api/aliases.md"],
+    ["Telemetry opt in", "notes/ops/telemetry.md"],
+    ["Testing with loom", "notes/dev/testing.md"],
+  ];
+  // deterministic RNG
+  let seed = 768;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const POOL = 96;
+  const exact = [];
+  let score = 0.912;
+  for (let i = 0; i < POOL; i++) {
+    const n = named[i % named.length];
+    const part = Math.floor(i / named.length);
+    const title = part ? `${n[0]} (chunk ${part + 1})` : n[0];
+    exact.push({
+      id: String(10000 + Math.floor(rnd() * 89999)),
+      title, src: n[1], score, rank: i,
+    });
+    // 12 rows span roughly 0.91 to 0.71, then a slow tail
+    score -= i < 11 ? 0.0165 + rnd() * 0.004 : 0.0028 + rnd() * 0.0016;
+  }
+
+  // fixed miss order, biased away from rank 1 so the top hit is stable
+  const firstOrder = [3, 8, 5, 10, 6, 11, 2, 9, 7, 4, 1];
+  const rest = [];
+  for (let i = 12; i < POOL; i++) rest.push(i);
+  for (let i = rest.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [rest[i], rest[j]] = [rest[j], rest[i]]; }
+  const missOrder = firstOrder.concat(rest);
+
+  function results(L, recall) {
+    const m = Math.min(Math.floor(L / 2), Math.round((1 - recall) * L * 2.5));
+    const victims = new Set(missOrder.filter(r => r < L).slice(0, m));
+    const found = exact.filter(e => !victims.has(e.rank)).slice(0, L);
+    return { found, victims: [...victims].sort((a, b) => a - b).map(r => exact[r]) };
+  }
+
+  // ---------- DOM ----------
+  const $ = id => document.getElementById(id);
+  const rEf = $("r-ef"), rOs = $("r-os"), rLim = $("r-limit");
+  const glyph = $("glyph"), rowsEl = $("rows");
+  const state = { active: "ef", pinned: "ef" };
+
+  const efFromSlider = v => Math.round(16 * Math.pow(2, v / 100));
+  const fmt = (n, d) => n.toFixed(d);
+
+  // ef ticks align with the log slider
+  const ticks = $("ef-ticks");
+  EF.forEach((e, i) => {
+    const s = document.createElement("span");
+    s.style.left = (i * 20) + "%";
+    s.dataset.ef = e;
+    s.textContent = e;
+    ticks.appendChild(s);
+  });
+
+  function setFill(input) {
+    const p = (input.value - input.min) / (input.max - input.min) * 100;
+    input.style.setProperty("--p", p + "%");
+  }
+
+  const AX = {
+    ef:    { name: "hnsw_ef <i>/</i> search beam width", range: "16 to 512, log scale" },
+    os:    { name: "oversampling <i>/</i> int8 candidates rescored", range: "1.0 to 4.0, times limit" },
+    limit: { name: "limit <i>/</i> results returned", range: "1 to 50" },
+  };
+
+  function rowEl(item) {
+    const el = document.createElement("div");
+    el.className = "row";
+    el.setAttribute("role", "listitem");
+    el.dataset.id = item.id;
+    el.innerHTML = `<span class="rk"></span><span class="id">${item.id}</span><span class="tt"></span><span class="src">${item.src}</span><span class="sc">${fmt(item.score, 3)}</span><span class="dl"></span>`;
+    el.querySelector(".tt").textContent = item.title;
+    return el;
+  }
+
+  function renderRows(found, L) {
+    const before = new Map();
+    for (const el of rowsEl.children) before.set(el.dataset.id, el.getBoundingClientRect().top);
+    const existing = new Map([...rowsEl.children].map(el => [el.dataset.id, el]));
+    const order = [];
+    found.forEach((item, i) => {
+      let el = existing.get(item.id);
+      if (el) existing.delete(item.id); else el = rowEl(item);
+      const off = item.rank >= L;
+      el.classList.toggle("off", off);
+      el.querySelector(".rk").textContent = i + 1;
+      el.querySelector(".dl").textContent = off ? "out" : (item.rank === i ? "=" : "#" + (item.rank + 1));
+      el.title = off
+        ? `Not in the exact top ${L}, exact rank ${item.rank + 1}`
+        : `Exact rank ${item.rank + 1}`;
+      order.push(el);
+    });
+    existing.forEach(el => el.remove());
+    order.forEach(el => rowsEl.appendChild(el));
+    if (reduced) return;
+    order.forEach(el => {
+      const was = before.get(el.dataset.id);
+      if (was == null) {
+        el.animate([{ opacity: 0, transform: "translateX(-8px)" }, { opacity: 1, transform: "none" }], { duration: 240, easing: "cubic-bezier(.2,.7,.2,1)" });
+        return;
+      }
+      const dy = was - el.getBoundingClientRect().top;
+      if (Math.abs(dy) > 0.5) {
+        el.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }], { duration: 280, easing: "cubic-bezier(.2,.7,.2,1)" });
+      }
+    });
+  }
+
+  function update() {
+    const ef = efFromSlider(+rEf.value);
+    const os = +rOs.value;
+    const L = +rLim.value;
+    [rEf, rOs, rLim].forEach(setFill);
+
+    const { recall, p50, p99 } = model(ef, os);
+    const { found, victims } = results(L, recall);
+
+    // outputs
+    $("o-ef").textContent = ef;
+    $("o-os").textContent = fmt(os, 1) + "×";
+    $("o-limit").textContent = L;
+    rEf.setAttribute("aria-valuetext", `ef ${ef}`);
+    rOs.setAttribute("aria-valuetext", `oversampling ${fmt(os, 1)} times`);
+    rLim.setAttribute("aria-valuetext", `limit ${L}`);
+    ticks.querySelectorAll("span").forEach(s => s.classList.toggle("on", +s.dataset.ef === ef));
+
+    // giant numeral: weight tracks recall, width tracks p50
+    const a = state.active;
+    if (a === "ef") glyph.innerHTML = String(ef);
+    else if (a === "os") glyph.innerHTML = fmt(os, 1) + '<span class="unit">×</span>';
+    else glyph.innerHTML = String(L);
+    const wght = Math.round(200 + Math.max(0, Math.min(1, (recall - 0.86) / 0.14)) * 600);
+    const lat = Math.max(0, Math.min(1, Math.log(p50 / 0.54) / Math.log(36 / 0.54)));
+    const wdth = Math.round(75 + lat * 25);
+    glyph.style.fontVariationSettings = `"opsz" 96, "wdth" ${wdth}, "wght" ${wght}`;
+    $("c-wght").textContent = wght;
+    $("c-wdth").textContent = wdth;
+    $("c-ef").textContent = ef;
+    $("c-os").textContent = fmt(os, 1);
+    $("c-k").textContent = L;
+    $("spec-name").innerHTML = AX[a].name;
+    $("spec-range").textContent = AX[a].range;
+    document.querySelectorAll(".axis").forEach(x => x.classList.toggle("is-active", x.dataset.axis === a));
+
+    // readouts
+    $("v-recall").textContent = fmt(recall, 3);
+    $("m-recall").style.width = (Math.max(0, (recall - 0.8) / 0.2) * 100) + "%";
+    const miss = (1 - recall) * 10;
+    $("s-recall").textContent = miss < 0.05
+      ? "under 0.05 of 10 neighbours missed"
+      : `${fmt(miss, miss < 1 ? 2 : 1)} of 10 neighbours missed`;
+    $("v-p50").textContent = fmt(p50, 1);
+    $("v-p99").textContent = fmt(p99, 1);
+    $("s-p50").textContent = `${Math.ceil(L * os)} candidates rescored`;
+    $("s-qps").textContent = `${Math.round(1000 / p50).toLocaleString("en")} qps per core`;
+
+    // results
+    renderRows(found, L);
+    const ok = L - victims.length;
+    const missedEl = $("missed");
+    if (!victims.length) {
+      missedEl.innerHTML = `Matches the exact top ${L}: <b>${L} of ${L}</b>, nothing missed for this query`;
+    } else {
+      const list = victims.slice(0, 3).map(v => `<span class="x">#${v.rank + 1}</span> ${v.title}`).join(", ");
+      const more = victims.length > 3 ? `, and ${victims.length - 3} more` : "";
+      missedEl.innerHTML = `Matches the exact top ${L}: <b>${ok} of ${L}</b>, missed ${list}${more}`;
+    }
+
+    // request
+    $("req").innerHTML =
+      `{"limit": <em>${L}</em>, "params": {"hnsw_ef": <em>${ef}</em>, "quantization": {"rescore": true, "oversampling": <em>${fmt(os, 1)}</em>}}}`;
+  }
+
+  // ---------- which axis is "under the cursor" ----------
+  document.querySelectorAll(".axis").forEach(row => {
+    const name = row.dataset.axis;
+    row.addEventListener("pointerenter", () => { state.active = name; update(); });
+    row.querySelector("input").addEventListener("focus", () => { state.active = state.pinned = name; update(); });
+    row.querySelector("input").addEventListener("input", () => { state.active = state.pinned = name; update(); });
+  });
+  $("axes").addEventListener("pointerleave", () => {
+    if (state.active !== state.pinned) { state.active = state.pinned; update(); }
+  });
+
+  $("copy").addEventListener("click", e => {
+    const txt = $("req").textContent;
+    (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(
+      () => { e.target.textContent = "Copied"; setTimeout(() => e.target.textContent = "Copy request", 1400); },
+      () => {}
+    );
+  });
+
+  // ---------- specimen guides from real glyph metrics ----------
+  function placeGuides() {
+    const cs = getComputedStyle(glyph);
+    const size = parseFloat(cs.fontSize);
+    const lh = parseFloat(cs.lineHeight);
+    const ctx = document.createElement("canvas").getContext("2d");
+    ctx.font = `700 ${size}px "Bricolage Grotesque"`;
+    const m = ctx.measureText("0123456789");
+    if (!m.fontBoundingBoxAscent) { $("g-cap").hidden = $("g-base").hidden = true; return; }
+    const asc = m.fontBoundingBoxAscent, desc = m.fontBoundingBoxDescent;
+    const baseline = (lh - (asc + desc)) / 2 + asc;
+    const figH = m.actualBoundingBoxAscent;
+    const topPad = 30, botPad = 26;
+    const shift = topPad - (baseline - figH);
+    glyph.style.marginTop = shift + "px";
+    $("glyph-wrap").style.height = (topPad + figH + botPad) + "px";
+    $("g-base").style.top = (baseline + shift) + "px";
+    $("g-cap").style.top = topPad + "px";
+  }
+
+  update();
+  (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => { placeGuides(); update(); });
+  addEventListener("resize", placeGuides);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+[package]
+name = "nocturnum-server"
+description = "The nocturnum binary: config, startup, the API listener and the embedded console"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+nocturnum-core.workspace = true
+nocturnum-api.workspace = true
+
+[[bin]]
+name = "nocturnum"
+path = "src/main.rs"

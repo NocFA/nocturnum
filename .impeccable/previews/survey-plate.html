@@ -1,0 +1,639 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nocturnum, notes-768 points (Survey Plate preview)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&family=Libre+Caslon+Text:ital,wght@0,400;0,700;1,400&family=Libre+Franklin:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#f1efe9;
+  --paper-2:#e8e4da;
+  --card:#fbfaf6;
+  --glass:#e9edf0;
+  --ink:#0d0f12;
+  --ink-2:#343941;
+  --ink-3:#5b616a;
+  --blue:#3d5a80;
+  --blue-2:rgba(61,90,128,.42);
+  --blue-3:rgba(61,90,128,.18);
+  --blue-4:rgba(61,90,128,.09);
+  --accent:#b5462f;
+  --rule:rgba(13,15,18,.16);
+  --serif:"Libre Caslon Text", "Iowan Old Style", Georgia, serif;
+  --sans:"Libre Franklin", "Franklin Gothic Book", "Helvetica Neue", Arial, sans-serif;
+  --mono:"Courier Prime", "Courier New", Courier, monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+  background:var(--paper);color:var(--ink);
+  font:13px/1.4 var(--sans);
+  font-variant-numeric:tabular-nums lining-nums;
+  -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--blue);color:var(--glass)}
+*{scrollbar-width:thin;scrollbar-color:var(--blue-2) transparent}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--blue-2);border:2px solid var(--paper);border-radius:0}
+::-webkit-scrollbar-thumb:hover{background:var(--blue)}
+.mono{font-family:var(--mono);font-variant-ligatures:none}
+button,input,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+
+.app{height:100vh;min-height:860px;min-width:1240px;display:grid;grid-template-rows:46px 1fr}
+
+/* app frame */
+.bar{display:flex;align-items:center;gap:26px;padding:0 18px;border-bottom:1px solid var(--ink);background:var(--paper)}
+.wordmark{display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--ink);font-family:var(--serif);font-weight:700;font-size:21px;letter-spacing:-.01em;line-height:1}
+.wordmark svg{display:block}
+.switch{display:flex;align-items:center;gap:8px;height:30px;padding:0 10px;border:1px solid var(--rule);background:var(--card);cursor:pointer}
+.switch:hover{border-color:var(--ink)}
+.switch .k{font-family:var(--serif);font-variant:small-caps;letter-spacing:.06em;color:var(--blue);font-size:12px}
+.switch .v{font-size:13.5px}
+.switch .ok{font-size:11.5px;color:var(--ink-3);padding-left:8px;border-left:1px solid var(--rule)}
+.nav{display:flex;gap:2px;height:100%}
+.nav a{display:flex;align-items:center;padding:0 11px;color:var(--ink-2);text-decoration:none;font-weight:500;font-size:13px;border-bottom:2px solid transparent;margin-bottom:-1px}
+.nav a:hover{color:var(--ink);border-bottom-color:var(--blue-2)}
+.nav a[aria-current="page"]{color:var(--ink);border-bottom-color:var(--ink)}
+.bar-right{margin-left:auto;display:flex;align-items:center;gap:10px;color:var(--ink-3);font-size:12px}
+.bar-right .mono{color:var(--ink-2)}
+
+/* main layout */
+.main{display:grid;grid-template-columns:minmax(0,1fr) 356px;gap:18px;padding:12px 16px 14px;min-height:0}
+.survey{display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;min-height:0;min-width:0}
+
+.head{display:flex;align-items:flex-end;gap:16px;padding-bottom:9px}
+.head h1{margin:0;font-family:var(--serif);font-weight:400;font-size:27px;line-height:1;letter-spacing:-.01em}
+.head .count{font-size:12.5px;color:var(--ink-3);padding-bottom:2px}
+.tools{margin-left:auto;display:flex;align-items:center;gap:10px}
+.filter{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--blue);padding:3px 2px;width:300px}
+.filter label{font-family:var(--serif);font-variant:small-caps;letter-spacing:.06em;color:var(--blue);font-size:12px}
+.filter input{flex:1;border:0;background:transparent;font-family:var(--mono);font-size:12.5px;outline:none}
+.filter input::placeholder{color:var(--ink-3)}
+.marksel{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-3)}
+.marksel select{border:1px solid var(--rule);background:var(--card);height:28px;padding:0 6px;font-family:var(--mono);font-size:12px}
+.btn{height:28px;padding:0 11px;border:1px solid var(--ink);background:var(--card);cursor:pointer;font-weight:500;font-size:12px;letter-spacing:.01em;white-space:nowrap}
+.btn:hover{background:var(--ink);color:var(--glass)}
+.btn.quiet{border-color:var(--rule)}
+.btn.quiet:hover{border-color:var(--ink)}
+.btn.warn{border-color:var(--accent);color:var(--accent)}
+.btn.warn:hover{background:var(--accent);color:var(--card)}
+
+/* plate envelope */
+.envelope{margin:0;display:grid;grid-template-columns:repeat(6,auto);border:1px solid var(--blue);border-bottom:0;background:var(--paper-2)}
+.envelope div{padding:5px 10px 6px;border-left:1px solid var(--blue-2);min-width:0}
+.envelope div:first-child{border-left:0}
+.envelope dt{font-family:var(--serif);font-variant:small-caps;letter-spacing:.07em;color:var(--blue);font-size:11px;line-height:1.2}
+.envelope dd{margin:2px 0 0;font-family:var(--mono);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.envelope .plate-no dd{font-weight:700}
+
+/* the plate */
+.plate-wrap{position:relative;border:1px solid var(--ink);background:var(--glass);min-height:0;overflow:hidden;cursor:crosshair}
+#plate{position:absolute;inset:0;width:100%;height:100%;display:block}
+.tag{position:absolute;top:34px;right:36px;padding:3px 8px 4px;background:var(--card);border:1px solid var(--blue);font-family:var(--serif);font-variant:small-caps;letter-spacing:.07em;color:var(--blue);font-size:12px;pointer-events:none}
+.legend{position:absolute;right:36px;bottom:34px;background:rgba(233,237,240,.94);border:1px solid var(--blue-2);padding:7px 10px 8px;pointer-events:none}
+.legend h3{margin:0 0 4px;font-family:var(--serif);font-weight:400;font-variant:small-caps;letter-spacing:.07em;color:var(--blue);font-size:12px}
+.legend ul{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:auto;row-gap:2px;min-width:150px}
+.legend li{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--ink-2);white-space:nowrap}
+.legend li svg{flex:none}
+.legend .n{font-family:var(--mono);font-size:11.5px;color:var(--ink-3);margin-left:auto;padding-left:8px}
+.legend .note{grid-column:1 / -1;margin-top:4px;padding-top:4px;border-top:1px solid var(--blue-3);color:var(--ink-3);font-size:11.5px}
+.tip{position:absolute;pointer-events:none;background:var(--card);border:1px solid var(--ink);padding:5px 8px 6px;font-size:12px;line-height:1.35;white-space:nowrap;display:none;z-index:3}
+.tip .t-id{font-family:var(--mono);font-weight:700}
+.tip .t-src{font-family:var(--mono);color:var(--ink-3);margin-left:6px}
+.tip .t-title{font-family:var(--serif);display:block}
+
+/* plate log */
+.logs{display:grid;grid-template-columns:1.38fr 1.56fr .9fr .8fr;gap:18px;padding-top:12px}
+.log{border-top:2px solid var(--ink);padding-top:6px;min-width:0}
+.log-h{display:flex;align-items:baseline;gap:8px;margin-bottom:3px}
+.log h2{margin:0;font-family:var(--serif);font-weight:700;font-size:14.5px;letter-spacing:-.005em}
+.log-h .meta{margin-left:auto;font-size:11.5px;color:var(--ink-3)}
+.log table{width:100%;border-collapse:collapse}
+.log th{text-align:left;font-family:var(--serif);font-weight:400;font-variant:small-caps;letter-spacing:.06em;color:var(--blue);font-size:11px;padding:2px 6px 2px 0;border-bottom:1px solid var(--blue-2)}
+.log td{padding:3px 6px 3px 0;border-bottom:1px solid var(--blue-3);font-size:11.5px;vertical-align:baseline;white-space:nowrap}
+.log td.mono{font-size:11.5px}
+.log td.wrap{white-space:normal;line-height:1.3}
+.log td.num,.log th.num{text-align:right}
+.log td.k{color:var(--ink-3)}
+.log tr.over td{color:var(--accent)}
+.flag{margin:7px 0 0;text-wrap:balance;display:flex;align-items:center;gap:10px;font-size:12px;color:var(--accent);line-height:1.3}
+.flag .btn{margin-left:auto;height:24px;padding:0 9px}
+.meter{display:inline-block;vertical-align:middle;width:64px;height:7px;border:1px solid var(--ink);position:relative;margin-right:6px}
+.meter i{position:absolute;left:0;top:0;bottom:0;background:var(--ink)}
+.meter.wide{width:100%;height:8px;margin:3px 0 1px}
+.meter .th{position:absolute;top:-3px;bottom:-3px;width:1px;background:var(--accent)}
+.res-row{display:grid;grid-template-columns:44px 1fr;column-gap:8px;align-items:center;padding:2px 0 3px;border-bottom:1px solid var(--blue-3)}
+.res-row .k{font-family:var(--serif);font-variant:small-caps;letter-spacing:.06em;color:var(--blue);font-size:11.5px}
+.res-row .v{font-family:var(--mono);font-size:12px;text-align:right}
+.res-row .meter.wide{grid-column:1 / -1}
+.recall{display:flex;align-items:baseline;gap:8px;margin:2px 0 0}
+.recall .big{font-family:var(--mono);font-weight:700;font-size:28px;line-height:1;letter-spacing:-.02em}
+.recall .lbl{white-space:nowrap;font-size:11.5px;color:var(--ink-3);line-height:1.25}
+.ruler{display:block;width:100%;height:46px;margin-top:8px;overflow:visible}
+
+/* catalogue card */
+.card{position:relative;background:var(--card);border:1px solid var(--rule);box-shadow:0 1px 0 rgba(13,15,18,.06);display:flex;flex-direction:column;min-height:0;overflow:auto}
+.card-top{padding:14px 18px 10px;border-bottom:1.5px solid var(--accent);display:flex;align-items:flex-end;gap:12px}
+.cat .lbl,.score .lbl{display:block;font-family:var(--serif);font-variant:small-caps;letter-spacing:.07em;color:var(--blue);font-size:11.5px}
+.catno{font-family:var(--mono);font-weight:700;font-size:31px;line-height:1;letter-spacing:-.01em}
+.score{margin-left:auto;text-align:right}
+.score .mono{font-size:22px;font-weight:700;color:var(--accent);line-height:1}
+.card-body{padding:12px 18px 18px;display:flex;flex-direction:column;gap:14px;flex:1}
+.card h2.title{margin:0;font-family:var(--serif);font-weight:400;font-size:22px;line-height:1.15}
+.card .src-line{display:flex;align-items:center;gap:7px;margin-top:5px;font-family:var(--mono);font-size:12px;color:var(--ink-2)}
+.fields{margin:0;display:grid;grid-template-columns:96px 1fr;border-top:1px solid var(--blue-2)}
+.fields dt,.fields dd{margin:0;padding:5px 0 5px;border-bottom:1px solid var(--blue-3);font-family:var(--mono);font-size:12.5px}
+.fields dt{color:var(--blue)}
+.fields dd{color:var(--ink);overflow-wrap:anywhere}
+.card h3{margin:0 0 5px;display:flex;align-items:baseline;gap:8px;font-family:var(--serif);font-weight:700;font-size:13.5px}
+.card h3 .meta{margin-left:auto;font-family:var(--mono);font-weight:400;font-size:11.5px;color:var(--ink-3)}
+#vec{display:block;width:100%;height:92px;border:1px solid var(--blue-2);background:var(--glass)}
+.vec-key{margin:4px 0 0;font-size:11.5px;color:var(--ink-3)}
+.vec-vals{margin:5px 0 0;font-family:var(--mono);font-size:11.5px;color:var(--ink-2);line-height:1.45}
+.vec-vals b{font-weight:400;color:var(--blue);display:inline-block;width:60px}
+.near ol{list-style:none;margin:0;padding:0;border-top:1px solid var(--blue-2)}
+.near li{display:grid;grid-template-columns:14px 50px 1fr auto;column-gap:8px;align-items:center;padding:4px 2px;border-bottom:1px solid var(--blue-3);cursor:pointer}
+.near li:hover{background:var(--blue-4)}
+.near .nid{font-family:var(--mono);font-size:12px}
+.near .nt{font-family:var(--serif);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.near .ns{font-family:var(--mono);font-size:12px;color:var(--ink-3)}
+.actions{display:flex;gap:8px;margin-top:auto;padding-top:4px}
+.punch{position:absolute;left:50%;bottom:9px;width:13px;height:13px;margin-left:-6.5px;border-radius:50%;background:var(--paper);border:1px solid var(--rule);box-shadow:inset 0 1px 1px rgba(13,15,18,.12)}
+.card-body{padding-bottom:36px}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="bar">
+    <a class="wordmark" href="#" aria-label="nocturnum home">
+      <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+        <circle cx="10" cy="10" r="8.2" fill="none" stroke="#0d0f12" stroke-width="1.3"/>
+        <path d="M10 1.8 A8.2 8.2 0 0 0 10 18.2 A5.2 8.2 0 0 1 10 1.8 Z" fill="#0d0f12"/>
+      </svg>
+      nocturnum
+    </a>
+    <button class="switch" type="button" aria-haspopup="listbox" aria-label="Switch collection, current notes-768">
+      <span class="k">collection</span>
+      <span class="v mono">notes-768</span>
+      <span class="ok mono">ok</span>
+      <svg width="9" height="6" viewBox="0 0 9 6" aria-hidden="true"><path d="M.5.8 4.5 5 8.5.8" fill="none" stroke="#0d0f12" stroke-width="1.2"/></svg>
+    </button>
+    <nav class="nav" aria-label="Console">
+      <a href="#">Collections</a>
+      <a href="#" aria-current="page">Points</a>
+      <a href="#">Query</a>
+      <a href="#">Search quality</a>
+      <a href="#">Snapshots</a>
+      <a href="#">Keys</a>
+    </nav>
+    <div class="bar-right">single node <span class="mono">127.0.0.1:6333</span></div>
+  </header>
+
+  <main class="main">
+    <section class="survey" aria-label="Points of notes-768">
+      <div class="head">
+        <h1>Points</h1>
+        <span class="count"><span class="mono">48,210</span> stored, <span class="mono">1,200</span> plotted</span>
+        <div class="tools">
+          <div class="filter">
+            <label for="flt">filter</label>
+            <input id="flt" type="text" placeholder='tags = "rust"' autocomplete="off" spellcheck="false">
+          </div>
+          <label class="marksel">marks by
+            <select aria-label="Mark points by payload field"><option>source</option><option>tags</option><option>pinned</option></select>
+          </label>
+          <button class="btn quiet" type="button">New sample</button>
+        </div>
+      </div>
+
+      <dl class="envelope" aria-label="Plate envelope">
+        <div class="plate-no"><dt>plate no.</dt><dd>U 0768 / 041</dd></div>
+        <div><dt>date</dt><dd>2026-10-10 03:00</dd></div>
+        <div><dt>exposure</dt><dd>text, 768 d, cosine</dd></div>
+        <div><dt>emulsion</dt><dd>float32, int8 scalar</dd></div>
+        <div><dt>instrument</dt><dd>HNSW m 16, ef_c 100, ef 128</dd></div>
+        <div><dt>projection</dt><dd>UMAP, 1,200 sample</dd></div>
+      </dl>
+
+      <div class="plate-wrap" id="wrap">
+        <svg id="plate" role="img" aria-label="UMAP projection of 1,200 sampled points from notes-768, marked by source"></svg>
+        <div class="tag">synthetic demo data</div>
+        <div class="legend" aria-label="Key">
+          <h3>key, by source in sample</h3>
+          <ul id="legend"></ul>
+        </div>
+        <div class="tip" id="tip"></div>
+      </div>
+
+      <div class="logs">
+        <section class="log">
+          <div class="log-h"><h2>Segments</h2><span class="meta"><span class="mono">3</span> segments, <span class="mono">48,210</span> points</span></div>
+          <table>
+            <thead><tr><th>segment</th><th>state</th><th class="num">points</th><th>condition</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">seg-a</td><td>indexed, HNSW</td><td class="mono num">21,400</td><td>ok</td></tr>
+              <tr class="over"><td class="mono">seg-b</td><td>indexed, HNSW</td><td class="mono num">19,880</td><td><span class="mono">23%</span> deleted</td></tr>
+              <tr><td class="mono">seg-c</td><td>appendable</td><td class="mono num">6,930</td><td><span class="meter" style="width:28px"><i style="width:61%"></i></span><span class="mono">61%</span> to index</td></tr>
+            </tbody>
+          </table>
+          <p class="flag">Over the 20% vacuum threshold<button class="btn warn" type="button">Vacuum seg-b</button></p>
+        </section>
+
+        <section class="log">
+          <div class="log-h"><h2>Indexes</h2><span class="meta">vector <span class="mono">text</span> and payload</span></div>
+          <table>
+            <tbody>
+              <tr><td class="k">vector</td><td class="mono">text, HNSW, cosine</td></tr>
+              <tr><td class="k">graph</td><td class="mono">m 16, ef 128</td></tr>
+              <tr><td class="k">build</td><td class="mono">ef_construct 100</td></tr>
+              <tr><td class="k">quantization</td><td class="mono">scalar int8, rescore on</td></tr>
+              <tr><td class="k">payload</td><td class="mono">source keyword, tags keyword<br>created_at datetime, pinned bool</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="log">
+          <div class="log-h"><h2>Memory and disk</h2></div>
+          <div class="res-row"><span class="k">ram</span><span class="v">1.12 of 2.00 GB</span><span class="meter wide"><i style="width:56%"></i></span></div>
+          <div class="res-row"><span class="k">disk</span><span class="v">3.4 of 20 GB</span><span class="meter wide"><i style="width:17%"></i></span></div>
+          <div class="res-row"><span class="k">snap</span><span class="v">03:00 nightly</span></div>
+          <div class="res-row" style="border-bottom:0"><span class="k">keep</span><span class="v">7 snapshots</span></div>
+        </section>
+
+        <section class="log">
+          <div class="log-h"><h2>Search quality</h2></div>
+          <div class="recall"><span class="big">0.987</span><span class="lbl">recall@10<br>vs exact, ef 128</span></div>
+          <svg class="ruler" id="ruler" aria-label="Latency p50 3.1 ms, p99 9.8 ms"></svg>
+        </section>
+      </div>
+    </section>
+
+    <aside class="card" aria-label="Catalogue card for the selected point" aria-live="polite">
+      <div class="card-top">
+        <div class="cat"><span class="lbl">cat. no.</span><span class="catno" id="c-id">41207</span></div>
+        <div class="score"><span class="lbl">to query</span><span class="mono" id="c-score">0.913</span></div>
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="title" id="c-title">Group commit notes</h2>
+          <div class="src-line" id="c-src"></div>
+        </div>
+        <dl class="fields" id="c-fields"></dl>
+        <section>
+          <h3>Vector <span class="meta">text, 768 d, cosine</span></h3>
+          <canvas id="vec" aria-label="Vector preview, 768 dimensions"></canvas>
+          <p class="vec-key">One cell per dimension, ink for positive and blue for negative</p>
+          <p class="vec-vals" id="c-vals"></p>
+        </section>
+        <section class="near">
+          <h3>Nearest by vector <span class="meta">cosine</span></h3>
+          <ol id="c-near"></ol>
+        </section>
+        <div class="actions">
+          <button class="btn" type="button">Find similar</button>
+          <button class="btn quiet" type="button">Open payload</button>
+          <button class="btn quiet" type="button" id="copy">Copy id</button>
+        </div>
+      </div>
+      <span class="punch" aria-hidden="true"></span>
+    </aside>
+  </main>
+</div>
+
+<script>
+(function(){
+const INK='#0d0f12', BLUE='#3d5a80', ACC='#b5462f', GLASS='#e9edf0';
+
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+const rng=mulberry32(0x5eed0768);
+function gaussOf(r){let u=0;while(u===0)u=r();const v=r();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v)}
+const gauss=()=>gaussOf(rng);
+
+/* ---------- synthetic points ---------- */
+const pts=[];
+const used=new Set([41207]);
+function newId(){let id;do{id=1+Math.floor(rng()*48210)}while(used.has(id));used.add(id);return id}
+function add(src,x,y){
+  x=Math.max(-6.3,Math.min(6.3,x)); y=Math.max(-3.05,Math.min(3.05,y));
+  pts.push({id:newId(),src,x,y,mag:Math.pow(rng(),3)});
+}
+function blob(src,n,cx,cy,sx,sy,rot){const c=Math.cos(rot),s=Math.sin(rot);for(let i=0;i<n;i++){const a=gauss()*sx,b=gauss()*sy;add(src,cx+a*c-b*s,cy+a*s+b*c)}}
+function arc(src,n,x0,y0,x1,y1,bend,w){
+  const mx=(x0+x1)/2,my=(y0+y1)/2,dx=x1-x0,dy=y1-y0,qx=mx-dy*bend,qy=my+dx*bend;
+  for(let i=0;i<n;i++){const t=rng(),u=1-t;add(src,u*u*x0+2*u*t*qx+t*t*x1+gauss()*w,u*u*y0+2*u*t*qy+t*t*y1+gauss()*w)}
+}
+function scatter(src,n){for(let i=0;i<n;i++)add(src,(rng()*2-1)*5.9,(rng()*2-1)*2.85)}
+
+// notes 420 (419 + the selected point)
+blob('notes',200,-1.95,0.6,0.78,0.48,0.35);
+blob('notes',150,-0.2,-0.55,0.55,0.4,-0.3);
+arc('notes',54,-3.0,1.25,-0.7,-0.05,0.35,0.13);
+scatter('notes',15);
+// bookmarks 330
+blob('bookmarks',190,3.0,1.35,1.0,0.4,-0.22);
+blob('bookmarks',85,4.7,-0.2,0.36,0.3,0);
+arc('bookmarks',45,3.7,0.85,4.6,0.05,-0.3,0.1);
+scatter('bookmarks',10);
+// mail 270
+blob('mail',170,2.05,-1.75,0.74,0.42,0.45);
+blob('mail',80,0.75,-2.35,0.38,0.24,0.15);
+scatter('mail',20);
+// chat 180
+blob('chat',110,-4.25,-1.35,0.6,0.48,0.25);
+arc('chat',50,-3.7,-0.95,-1.45,-0.62,0.42,0.12);
+scatter('chat',20);
+
+const SEL={id:41207,src:'notes',x:-0.38,y:-0.5,mag:.55};
+pts.push(SEL);
+const QUERY={x:-0.56,y:-0.33};
+
+// pinned anchors
+[[-2.7,1.2],[-1.15,1.0],[0.3,-1.0],[2.35,1.85],[3.9,1.05],[4.85,-0.45],[1.75,-1.35],[0.6,-2.6],[-4.7,-1.05],[-2.6,-0.85]].forEach(([ax,ay])=>{
+  let best=null,bd=1e9;
+  for(const p of pts){if(p===SEL||p.pinned)continue;const d=(p.x-ax)**2+(p.y-ay)**2;if(d<bd){bd=d;best=p}}
+  best.pinned=true;
+});
+
+/* ---------- synthetic payloads ---------- */
+const TITLES={
+  notes:['WAL segment rotation','fsync batching on ext4','Compaction scheduling ideas','HNSW layer pruning','Read path latency budget','Snapshot restore checklist','Tokio blocking pool sizing','mmap against pread','Quantization error notes','Payload index cardinality','Backpressure on ingest','Write stall postmortem','Optimizer thresholds'],
+  bookmarks:['LSM trees explained','Product quantization primer','SQLite WAL mode docs','The log is the database','ScaNN paper','Faiss index factory wiki','Jepsen analysis of etcd','HNSW original paper','Designing data intensive apps, ch. 3','Rust atomics and locks'],
+  mail:['Re: router firmware update','Invoice for October','Your order has shipped','Re: weekend plans','Backup report for Saturday','Re: flat viewing Tuesday','Domain renewal notice','Re: dentist on the 14th'],
+  chat:['about write stalls','rust lifetimes question','dinner on Friday','the benchmark numbers','who has the spare SSD','game night schedule','the vacuum threshold']
+};
+const TAGS={notes:['rust','wal','storage','hnsw','perf','ops','ideas'],bookmarks:['papers','db','rust','search','read-later'],mail:['home','billing','travel','orders'],chat:['friends','work','rust','plans']};
+const pay=new Map();
+function payload(p){
+  if(pay.has(p.id))return pay.get(p.id);
+  let d;
+  if(p.id===41207){
+    d={title:'Group commit notes',tags:['rust','wal'],created:'2026-09-28T21:14:00Z',pinned:false,seg:'seg-a',score:0.913};
+  }else{
+    const r=mulberry32((p.id*2654435761)>>>0);
+    const L=TITLES[p.src];const title=L[Math.floor(r()*L.length)];
+    const T=TAGS[p.src].slice();const n=1+Math.floor(r()*2.4);const tags=[];
+    for(let i=0;i<n&&T.length;i++)tags.push(T.splice(Math.floor(r()*T.length),1)[0]);
+    const t0=Date.UTC(2025,2,1),t1=Date.UTC(2026,9,9);
+    const dt=new Date(t0+r()*(t1-t0));dt.setUTCSeconds(0,0);
+    const h=p.id%100;const seg=h<44?'seg-a':h<85?'seg-b':'seg-c';
+    const dq=Math.hypot(p.x-QUERY.x,p.y-QUERY.y);
+    const score=Math.max(0.04,Math.min(0.96,0.95-dq*0.11-r()*0.02));
+    d={title,tags,created:dt.toISOString().slice(0,19)+'Z',pinned:!!p.pinned,seg,score};
+  }
+  pay.set(p.id,d);return d;
+}
+
+/* ---------- ink marks ---------- */
+const MARK={notes:'dot',bookmarks:'ring',mail:'cross',chat:'tri'};
+function markPath(kind,x,y,r){
+  x=+x.toFixed(2);y=+y.toFixed(2);r=+r.toFixed(2);
+  if(kind==='dot'||kind==='ring')return `M${x-r} ${y}a${r} ${r} 0 1 0 ${2*r} 0a${r} ${r} 0 1 0 ${-2*r} 0`;
+  if(kind==='cross')return `M${x-r} ${y-r}L${x+r} ${y+r}M${x+r} ${y-r}L${x-r} ${y+r}`;
+  const h=r*0.87;return `M${x} ${(y-r).toFixed(2)}L${(x+h).toFixed(2)} ${(y+r*.55).toFixed(2)}L${(x-h).toFixed(2)} ${(y+r*.55).toFixed(2)}Z`;
+}
+function radius(kind,mag,pinned){
+  const base={dot:1.35+mag*1.6,ring:2.0+mag*1.3,cross:1.75+mag*1.1,tri:2.3+mag*1.3}[kind];
+  return pinned?base*1.85:base;
+}
+function markAttrs(kind,pinned){
+  if(kind==='dot')return `fill="${INK}"`;
+  const w=pinned?1.35:0.95;
+  return `fill="none" stroke="${INK}" stroke-width="${w}" stroke-linejoin="round"`;
+}
+function markSVG(src,size,color){
+  const k=MARK[src],s=size||14,c=s/2,r=k==='dot'?s*0.2:k==='cross'?s*0.24:s*0.3;
+  const a=k==='dot'?`fill="${color||INK}"`:`fill="none" stroke="${color||INK}" stroke-width="1.2" stroke-linejoin="round"`;
+  return `<svg width="${s}" height="${s}" viewBox="0 0 ${s} ${s}" aria-hidden="true"><path d="${markPath(k,c,k==='tri'?c+1:c,r)}" ${a}/></svg>`;
+}
+
+/* legend */
+const counts={notes:0,bookmarks:0,mail:0,chat:0};pts.forEach(p=>counts[p.src]++);
+document.getElementById('legend').innerHTML=
+  Object.keys(counts).map(s=>`<li>${markSVG(s,13)}<span>${s}</span><span class="n">${counts[s]}</span></li>`).join('')+
+  `<li class="note" style="display:block">Large marks are pinned,<br>numbered from the catalogue</li>`;
+
+/* ---------- plate render ---------- */
+const wrap=document.getElementById('wrap'),svg=document.getElementById('plate'),tip=document.getElementById('tip');
+let selected=SEL,hover=null,W=0,H=0,S=1,CX=0,CY=0;
+const M=28;
+
+function handCircle(x,y,r,seed){
+  const rr=mulberry32(seed);const ph=rr()*6.28,n=40,turn=Math.PI*2*1.12;let d='';
+  for(let i=0;i<=n;i++){
+    const t=i/n,a=ph+t*turn,k=r*(1+0.07*Math.sin(3*a+ph)+0.03*(rr()-.5))*(1+t*0.06);
+    d+=(i?'L':'M')+(x+Math.cos(a)*k).toFixed(2)+' '+(y+Math.sin(a)*k*0.92).toFixed(2);
+  }
+  return d;
+}
+const fmt=v=>(v<0?'−':v>0?'+':'')+Math.abs(v);
+
+function render(){
+  const b=wrap.getBoundingClientRect();W=b.width;H=b.height;
+  const iw=W-2*M,ih=H-2*M;
+  S=Math.min(iw/13.2,ih/6.6);CX=W/2;CY=H/2;
+  const X=x=>CX+x*S,Y=y=>CY-y*S;
+  const xr=(iw/2)/S,yr=(ih/2)/S;
+  let o=`<defs>
+    <filter id="grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="2" seed="7" stitchTiles="stitch"/>
+      <feColorMatrix values="0 0 0 0 .05  0 0 0 0 .06  0 0 0 0 .07  1.4 0 0 0 -.62"/>
+    </filter>
+    <clipPath id="field"><rect x="${M}" y="${M}" width="${iw}" height="${ih}"/></clipPath>
+  </defs>`;
+  o+=`<rect width="${W}" height="${H}" fill="${GLASS}"/>`;
+  o+=`<rect width="${W}" height="${H}" filter="url(#grain)" opacity=".22"/>`;
+
+  // reticle grid
+  let minor='',major='',ticks='',labels='';
+  for(let v=Math.ceil(-xr*2)/2;v<=xr;v+=0.5){
+    const x=X(v).toFixed(1);const isMaj=Math.abs(v%1)<1e-6;
+    if(isMaj)major+=`M${x} ${M}V${H-M}`;else minor+=`M${x} ${M}V${H-M}`;
+    if(isMaj){
+      ticks+=`M${x} ${M}v-5M${x} ${H-M}v5`;
+      if(Math.abs(v)<xr-0.3)labels+=`<text x="${x}" y="${M-9}" text-anchor="middle">${fmt(v)}</text><text x="${x}" y="${H-M+17}" text-anchor="middle">${fmt(v)}</text>`;
+    }
+  }
+  for(let v=Math.ceil(-yr*2)/2;v<=yr;v+=0.5){
+    const y=Y(v).toFixed(1);const isMaj=Math.abs(v%1)<1e-6;
+    if(isMaj)major+=`M${M} ${y}H${W-M}`;else minor+=`M${M} ${y}H${W-M}`;
+    if(isMaj){
+      ticks+=`M${M} ${y}h-5M${W-M} ${y}h5`;
+      if(Math.abs(v)<yr-0.2)labels+=`<text x="${M-8}" y="${(+y+3.5).toFixed(1)}" text-anchor="end">${fmt(v)}</text><text x="${W-M+8}" y="${(+y+3.5).toFixed(1)}">${fmt(v)}</text>`;
+    }
+  }
+  o+=`<path d="${minor}" stroke="${BLUE}" stroke-opacity=".13" stroke-width=".6" fill="none"/>`;
+  o+=`<path d="${major}" stroke="${BLUE}" stroke-opacity=".3" stroke-width=".7" fill="none"/>`;
+  // centre reticle with fine ticks
+  let ret=`M${CX} ${M}V${H-M}M${M} ${CY}H${W-M}`;
+  for(let v=-xr;v<=xr;v+=0.25){const x=X(Math.round(v*4)/4);ret+=`M${x.toFixed(1)} ${CY-3}v6`}
+  for(let v=-yr;v<=yr;v+=0.25){const y=Y(Math.round(v*4)/4);ret+=`M${CX-3} ${y.toFixed(1)}h6`}
+  o+=`<path d="${ret}" stroke="${BLUE}" stroke-opacity=".62" stroke-width=".8" fill="none"/>`;
+  o+=`<rect x="${M}" y="${M}" width="${iw}" height="${ih}" fill="none" stroke="${BLUE}" stroke-width="1"/>`;
+  o+=`<path d="${ticks}" stroke="${BLUE}" stroke-width="1" fill="none"/>`;
+  o+=`<g font-family="Courier Prime, Courier New, monospace" font-size="10.5" fill="${BLUE}">${labels}</g>`;
+  o+=`<g font-family="Libre Caslon Text, Georgia, serif" font-style="italic" font-size="12" fill="${BLUE}">
+      <text x="${W-M-4}" y="${H-M+17}" text-anchor="end" font-size="0"></text>
+      <text x="${M+4}" y="${M-9}">u₁</text><text x="${M-8}" y="${M+14}" text-anchor="end">u₂</text></g>`;
+  // corner fiducials
+  const f=12;let fid='';
+  [[M,M,1,1],[W-M,M,-1,1],[M,H-M,1,-1],[W-M,H-M,-1,-1]].forEach(([x,y,sx,sy])=>{fid+=`M${x+sx*3} ${y+sy*(3+f)}V${y+sy*3}H${x+sx*(3+f)}`});
+  o+=`<path d="${fid}" stroke="${INK}" stroke-width="1.4" fill="none"/>`;
+
+  // cluster names, written on the plate
+  const names=[['notes',-2.5,1.62],['bookmarks',3.7,2.45],['mail',3.1,-2.55],['chat',-4.95,-2.25]];
+  o+=`<g clip-path="url(#field)" font-family="Libre Caslon Text, Georgia, serif" font-style="italic" font-size="14" letter-spacing=".5" fill="${INK}" fill-opacity=".72" stroke="${GLASS}" stroke-width="3.5" paint-order="stroke" stroke-linejoin="round">`+
+    names.map(([n,x,y])=>`<text x="${X(x).toFixed(1)}" y="${Y(y).toFixed(1)}" text-anchor="middle">${n}</text>`).join('')+`</g>`;
+
+  // points
+  const groups={};
+  for(const p of pts){
+    p.px=X(p.x);p.py=Y(p.y);
+    if(p===selected)continue;
+    const k=MARK[p.src],key=k+(p.pinned?'P':'');
+    (groups[key]=groups[key]||[]).push(markPath(k,p.px,p.py,radius(k,p.mag,p.pinned)));
+  }
+  o+=`<g clip-path="url(#field)">`;
+  for(const key in groups){const k=key.replace('P','');o+=`<path d="${groups[key].join('')}" ${markAttrs(k,key.endsWith('P'))}/>`}
+  o+=`</g>`;
+
+  // catalogue numbers for pinned points
+  let lab='',lead='';const placed=[];
+  for(const p of pts){
+    if(!p.pinned||p===selected)continue;
+    const r=radius(MARK[p.src],p.mag,true);
+    const tw=String(p.id).length*6.4,ty=p.py-r-6;let side=1,tx=p.px+r+9;
+    const hit=(x0)=>placed.some(b=>x0<b.x+b.w&&x0+tw>b.x&&ty-9<b.y+11&&ty+2>b.y-9+0);
+    if(hit(tx)){side=-1;tx=p.px-r-9-tw}
+    placed.push({x:tx,y:ty,w:tw});
+    lead+=`M${(p.px+side*(r+3)).toFixed(1)} ${(p.py-r-2.5).toFixed(1)}l${side*5} -4`;
+    lab+=`<text x="${tx.toFixed(1)}" y="${ty.toFixed(1)}">${p.id}</text>`;
+  }
+  o+=`<path d="${lead}" stroke="${INK}" stroke-width=".8" fill="none"/>`;
+  o+=`<g font-family="Courier Prime, Courier New, monospace" font-size="10.5" fill="${INK}" stroke="${GLASS}" stroke-width="3" paint-order="stroke" stroke-linejoin="round">${lab}</g>`;
+
+  // query reticle
+  const qx=X(QUERY.x),qy=Y(QUERY.y);
+  o+=`<g stroke="${ACC}" stroke-width="1.1" fill="none"><circle cx="${qx.toFixed(1)}" cy="${qy.toFixed(1)}" r="4.5"/>
+     <path d="M${qx-11} ${qy}h5M${qx+6} ${qy}h5M${qx} ${qy-11}v5M${qx} ${qy+6}v5"/></g>`;
+  o+=`<text x="${(qx-13).toFixed(1)}" y="${(qy-8).toFixed(1)}" text-anchor="end" font-family="Libre Caslon Text, Georgia, serif" font-style="italic" font-size="13" fill="${ACC}" stroke="${GLASS}" stroke-width="3" paint-order="stroke">query</text>`;
+
+  // selected point, ringed by hand in red ink
+  const s=selected,sp=payload(s),k=MARK[s.src];
+  const sr=Math.max(3,radius(k,s.mag,s.pinned)*1.2);
+  o+=`<path d="${markPath(k,s.px,s.py,sr)}" ${k==='dot'?`fill="${ACC}"`:`fill="none" stroke="${ACC}" stroke-width="1.5" stroke-linejoin="round"`}/>`;
+  o+=`<path d="${handCircle(s.px,s.py,12,s.id)}" fill="none" stroke="${ACC}" stroke-width="1.35" stroke-linecap="round"/>`;
+  const right=s.px<W-280,down=s.py<130;
+  const dx=right?1:-1,dy=down?1:-1;
+  const ax=s.px+dx*10,ay=s.py+dy*9,bx=s.px+dx*44,by=s.py+dy*40;
+  o+=`<path d="M${ax.toFixed(1)} ${ay.toFixed(1)}L${bx.toFixed(1)} ${by.toFixed(1)}h${dx*14}" stroke="${ACC}" stroke-width="1" fill="none"/>`;
+  const tx=bx+dx*18,anchor=right?'start':'end';
+  o+=`<g font-family="Libre Caslon Text, Georgia, serif" fill="${ACC}" stroke="${GLASS}" stroke-width="3.5" paint-order="stroke" stroke-linejoin="round" text-anchor="${anchor}">
+      <text x="${tx.toFixed(1)}" y="${(by+4).toFixed(1)}" font-size="13.5"><tspan font-family="Courier Prime, Courier New, monospace" font-weight="700">${s.id}</tspan><tspan font-style="italic" dx="6">${esc(sp.title)}</tspan></text>
+      <text x="${tx.toFixed(1)}" y="${(by+20).toFixed(1)}" font-size="12" font-style="italic"><tspan font-family="Courier Prime, Courier New, monospace" font-style="normal">${sp.score.toFixed(3)}</tspan> to query</text></g>`;
+
+  // plate number scratched into the emulsion
+  o+=`<text x="${M+24}" y="${H-M-9}" font-family="Courier Prime, Courier New, monospace" font-size="11.5" font-weight="700" fill="${INK}" fill-opacity=".78" letter-spacing="1">U 0768 / 041</text>`;
+
+  // hover ring
+  o+=`<circle id="hov" r="7" fill="none" stroke="${BLUE}" stroke-width="1.3" visibility="hidden"/>`;
+  svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  svg.innerHTML=o;
+}
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+/* ---------- latency ruler ---------- */
+(function(){
+  const r=document.getElementById('ruler');const w=r.clientWidth||180,max=12,X=v=>4+v/max*(w-8);
+  let t='';for(let v=0;v<=max;v++){t+=`M${X(v)} 22v${v%3===0?-7:-4}`}
+  let o=`<path d="M${X(0)} 22H${X(max)}${t}" stroke="${INK}" stroke-width="1" fill="none" vector-effect="non-scaling-stroke"/>`;
+  [[3.1,'p50 3.1'],[9.8,'p99 9.8']].forEach(([v,l],i)=>{
+    o+=`<path d="M${X(v)} 26l-3.5 6h7z" fill="${INK}"/>`;
+    o+=`<text x="${X(v)}" y="41" text-anchor="end" dx="5" font-family="Courier Prime, Courier New, monospace" font-size="11" fill="${INK}">${l}</text>`;
+  });
+  [0,6,12].forEach(v=>{o+=`<text x="${X(v)}" y="11" text-anchor="${v===12?'end':v===0?'start':'middle'}" font-family="Courier Prime, Courier New, monospace" font-size="9.5" fill="${BLUE}">${v===12?'12 ms':v}</text>`});
+  r.innerHTML=o;
+  r.setAttribute('viewBox',`0 0 ${w} 46`);
+})();
+
+/* ---------- catalogue card ---------- */
+function vector(id){
+  const r=mulberry32((id*40503+768)>>>0);const v=new Float32Array(768);let n=0;
+  for(let i=0;i<768;i++){v[i]=gaussOf(r)*(1+0.6*Math.sin(i/37));n+=v[i]*v[i]}
+  n=Math.sqrt(n);for(let i=0;i<768;i++)v[i]/=n;return v;
+}
+const num=x=>(x<0?'−':' ')+Math.abs(x).toFixed(4);
+function drawVec(v){
+  const c=document.getElementById('vec'),dpr=window.devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;
+  c.width=w*dpr;c.height=h*dpr;const g=c.getContext('2d');g.scale(dpr,dpr);
+  g.fillStyle=GLASS;g.fillRect(0,0,w,h);
+  const cols=48,rows=16,cw=(w-4)/cols,ch=(h-4)/rows;let mx=0;for(const x of v)mx=Math.max(mx,Math.abs(x));
+  for(let i=0;i<768;i++){
+    const a=Math.pow(Math.abs(v[i])/mx,0.75);const cx=2+(i%cols)*cw,cy=2+Math.floor(i/cols)*ch;
+    g.fillStyle=v[i]>=0?`rgba(13,15,18,${(a*0.95).toFixed(3)})`:`rgba(61,90,128,${(a*0.95).toFixed(3)})`;
+    g.fillRect(cx+0.5,cy+0.5,cw-1,ch-1);
+  }
+}
+function showCard(p){
+  const d=payload(p),v=vector(p.id);
+  document.getElementById('c-id').textContent=p.id;
+  document.getElementById('c-score').textContent=d.score.toFixed(3);
+  document.getElementById('c-title').textContent=d.title;
+  document.getElementById('c-src').innerHTML=`${markSVG(p.src,13)}<span>source "${p.src}", in ${d.seg}</span>`;
+  const fields=[
+    ['id',p.id],['source','"'+p.src+'"'],['title','"'+esc(d.title)+'"'],['tags','['+d.tags.map(t=>'"'+t+'"').join(', ')+']'],
+    ['created_at',d.created],['pinned',String(d.pinned)],['plate u1, u2',p.x.toFixed(2)+', '+p.y.toFixed(2)]
+  ];
+  document.getElementById('c-fields').innerHTML=fields.map(([k,val])=>`<dt>${k}</dt><dd>${val}</dd>`).join('');
+  drawVec(v);
+  let mx=0;for(const x of v)mx=Math.max(mx,Math.abs(x));
+  const f=[0,1,2,3].map(i=>num(v[i])).join('  ');
+  const q=[0,1,2,3].map(i=>String(Math.round(v[i]/mx*127)).padStart(7,' ')).join('  ');
+  document.getElementById('c-vals').innerHTML=`<b>float32</b>${f}  …<br><b>int8</b>${q}  …`;
+  const near=pts.filter(o=>o!==p).map(o=>({o,d:Math.hypot(o.x-p.x,o.y-p.y)})).sort((a,b)=>a.d-b.d).slice(0,6);
+  near.forEach(n=>n.c=Math.max(0.3,0.982-n.d*0.085-((n.o.id%7)*0.002)));near.sort((a,b)=>b.c-a.c);
+  document.getElementById('c-near').innerHTML=near.map(({o,c})=>{
+    return `<li data-id="${o.id}">${markSVG(o.src,12)}<span class="nid">${o.id}</span><span class="nt">${esc(payload(o).title)}</span><span class="ns">${c.toFixed(3)}</span></li>`;
+  }).join('');
+}
+document.getElementById('c-near').addEventListener('click',e=>{
+  const li=e.target.closest('li');if(!li)return;const p=pts.find(o=>o.id===+li.dataset.id);if(p)select(p);
+});
+function select(p){selected=p;render();showCard(p)}
+
+/* ---------- hover and click on the plate ---------- */
+function nearest(mx,my){
+  let best=null,bd=100;
+  for(const p of pts){const d=(p.px-mx)**2+(p.py-my)**2;if(d<bd){bd=d;best=p}}
+  return best;
+}
+wrap.addEventListener('mousemove',e=>{
+  const b=wrap.getBoundingClientRect(),mx=e.clientX-b.left,my=e.clientY-b.top;
+  const p=nearest(mx,my),h=document.getElementById('hov');
+  if(!p){h.setAttribute('visibility','hidden');tip.style.display='none';hover=null;return}
+  hover=p;h.setAttribute('cx',p.px);h.setAttribute('cy',p.py);h.setAttribute('visibility','visible');
+  const d=payload(p);
+  tip.innerHTML=`<span class="t-id">${p.id}</span><span class="t-src">${p.src}</span><span class="t-title">${esc(d.title)}</span>`;
+  tip.style.display='block';
+  const tw=tip.offsetWidth,th=tip.offsetHeight;
+  let tx=p.px+14,ty=p.py-th-10;if(tx+tw>b.width-8)tx=p.px-tw-14;if(ty<8)ty=p.py+14;
+  tip.style.left=tx+'px';tip.style.top=ty+'px';
+});
+wrap.addEventListener('mouseleave',()=>{tip.style.display='none';const h=document.getElementById('hov');if(h)h.setAttribute('visibility','hidden')});
+wrap.addEventListener('click',()=>{if(hover&&hover!==selected)select(hover)});
+
+document.getElementById('copy').addEventListener('click',e=>{
+  const b=e.currentTarget;try{navigator.clipboard&&navigator.clipboard.writeText(String(selected.id))}catch(_){}
+  b.textContent='Copied';setTimeout(()=>b.textContent='Copy id',1400);
+});
+
+new ResizeObserver(()=>{render();drawVec(vector(selected.id))}).observe(wrap);
+render();showCard(selected);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+/target
+/storage
+/snapshots
+/console/node_modules
+/console/build
+/console/.svelte-kit
+.DS_Store
+# local agent and design working files
+/.agent-logs
+/.impeccable/review
+/.impeccable/decision
+/.impeccable/config.local.json

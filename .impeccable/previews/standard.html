@@ -1,0 +1,804 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>notes-768 · nocturnum</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ground: #0b0d12;
+    --surface: #0f1218;
+    --raised: #141821;
+    --hover: #171c26;
+    --line: #1c212c;
+    --line-2: #262c39;
+    --text: #e5e7eb;
+    --text-2: #a3a9b5;
+    --text-3: #7a8191;
+    --accent: #dc244c;
+    --accent-ink: #ff6b8a;
+    --accent-soft: rgba(220, 36, 76, 0.12);
+    --accent-line: rgba(220, 36, 76, 0.45);
+    --ok: #3fb37f;
+    --ok-soft: rgba(63, 179, 127, 0.12);
+    --warn: #e2a33b;
+    --warn-soft: rgba(226, 163, 59, 0.11);
+    --sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --r: 6px;
+    --r-sm: 4px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--ground);
+    color: var(--text);
+    font: 400 13px/1.45 var(--sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow: hidden;
+  }
+  ::selection { background: rgba(220, 36, 76, 0.38); color: #fff; }
+
+  * { scrollbar-width: thin; scrollbar-color: #2a3040 transparent; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #232937; border-radius: 10px; border: 3px solid var(--ground); }
+  ::-webkit-scrollbar-thumb:hover { background: #2f3646; }
+  ::-webkit-scrollbar-corner { background: transparent; }
+
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus { outline: none; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
+
+  .num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
+  .mono { font-family: var(--mono); font-size: 12px; }
+  .dim { color: var(--text-3); }
+  .muted { color: var(--text-2); }
+
+  /* ---------- shell ---------- */
+  .app { display: grid; grid-template-columns: 232px 1fr; height: 100vh; }
+
+  /* ---------- sidebar ---------- */
+  .side {
+    border-right: 1px solid var(--line);
+    background: var(--surface);
+    display: flex; flex-direction: column;
+    min-height: 0;
+  }
+  .brand {
+    height: 48px; display: flex; align-items: center; gap: 9px;
+    padding: 0 16px; border-bottom: 1px solid var(--line);
+  }
+  .brand svg { flex: none; }
+  .brand b { font-weight: 600; font-size: 15px; letter-spacing: -0.01em; }
+  .brand .ver { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-3); }
+
+  .side-scroll { flex: 1; overflow: auto; padding: 14px 8px 12px; }
+  .side-h {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 8px 6px; color: var(--text-3); font-size: 12px; font-weight: 500;
+  }
+  .icon-btn {
+    width: 24px; height: 24px; display: grid; place-items: center;
+    background: none; border: 1px solid transparent; border-radius: var(--r-sm); color: var(--text-3);
+  }
+  .icon-btn:hover { background: var(--hover); color: var(--text); }
+
+  .coll { list-style: none; margin: 0 0 18px; padding: 0; }
+  .coll a {
+    position: relative;
+    display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px;
+    height: 30px; padding: 0 8px 0 10px; border-radius: var(--r-sm);
+    color: var(--text-2); text-decoration: none;
+  }
+  .coll a:hover { background: var(--hover); color: var(--text); }
+  .coll a[aria-current="page"] { background: var(--raised); color: var(--text); }
+  .coll a[aria-current="page"]::before {
+    content: ""; position: absolute; left: -8px; top: 7px; bottom: 7px; width: 2px;
+    background: var(--accent); border-radius: 0 2px 2px 0;
+  }
+  .coll .nm { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .coll .nm span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); flex: none; }
+  .dot.warn { background: var(--warn); }
+  .coll .ct { font-size: 12px; color: var(--text-3); }
+
+  .nav { list-style: none; margin: 0; padding: 0; }
+  .nav a {
+    display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 10px;
+    border-radius: var(--r-sm); color: var(--text-2); text-decoration: none;
+  }
+  .nav a:hover { background: var(--hover); color: var(--text); }
+  .nav svg { color: var(--text-3); }
+
+  .side-foot {
+    border-top: 1px solid var(--line); padding: 12px 16px; font-size: 12px; color: var(--text-3);
+    display: grid; gap: 4px;
+  }
+  .side-foot .row { display: flex; justify-content: space-between; }
+  .side-foot .row span:last-child { color: var(--text-2); }
+
+  /* ---------- main column ---------- */
+  .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+
+  .top {
+    height: 48px; flex: none; display: flex; align-items: center; gap: 16px;
+    padding: 0 20px 0 24px; border-bottom: 1px solid var(--line);
+  }
+  .crumbs { display: flex; align-items: center; gap: 8px; color: var(--text-3); white-space: nowrap; }
+  .crumbs a { color: var(--text-3); text-decoration: none; }
+  .crumbs a:hover { color: var(--text); }
+  .crumbs .cur { color: var(--text); font-weight: 500; }
+  .search {
+    margin-left: 24px; flex: 0 1 380px; position: relative; display: flex; align-items: center;
+  }
+  .search svg { position: absolute; left: 10px; color: var(--text-3); pointer-events: none; }
+  .search input {
+    width: 100%; height: 30px; padding: 0 40px 0 32px;
+    background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r);
+    color: var(--text);
+  }
+  .search input::placeholder { color: var(--text-3); }
+  .search input:hover { border-color: #313849; }
+  .search input:focus-visible { outline: none; border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
+  kbd {
+    font-family: var(--mono); font-size: 11px; color: var(--text-3);
+    border: 1px solid var(--line-2); border-bottom-width: 2px; border-radius: 4px;
+    padding: 0 5px; line-height: 16px; background: var(--ground);
+  }
+  .search kbd { position: absolute; right: 8px; }
+
+  .top-right { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+  .cluster {
+    display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px;
+    border: 1px solid var(--line-2); border-radius: var(--r); background: none; color: var(--text-2);
+  }
+  .cluster:hover { background: var(--hover); color: var(--text); }
+  .cluster .sep { width: 1px; height: 12px; background: var(--line-2); }
+  .demo-tag {
+    font-family: var(--mono); font-size: 11px; color: var(--text-3);
+    border: 1px dashed #343b4b; border-radius: 4px; padding: 3px 7px; white-space: nowrap;
+  }
+
+  /* ---------- collection header ---------- */
+  .head { flex: none; padding: 18px 24px 0; border-bottom: 1px solid var(--line); }
+  .head-row { display: flex; align-items: flex-start; gap: 16px; }
+  .title { display: flex; align-items: center; gap: 10px; }
+  .title h1 { margin: 0; font-size: 20px; line-height: 28px; font-weight: 600; letter-spacing: -0.015em; font-family: var(--sans); }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0 8px;
+    border-radius: 10px; font-size: 12px; font-weight: 500;
+  }
+  .pill.ok { color: var(--ok); background: var(--ok-soft); }
+  .pill.ok .dot { width: 5px; height: 5px; }
+  .meta { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 0 14px; color: var(--text-2); }
+  .meta > span { display: inline-flex; align-items: center; gap: 6px; }
+  .meta > span + span::before { content: ""; width: 3px; height: 3px; border-radius: 50%; background: #3a4152; margin-right: 8px; }
+  .meta code { font-family: var(--mono); font-size: 12px; color: var(--text); }
+
+  .actions { margin-left: auto; display: flex; gap: 8px; padding-top: 2px; }
+  .btn {
+    height: 30px; padding: 0 12px; border-radius: var(--r);
+    display: inline-flex; align-items: center; gap: 7px;
+    background: var(--raised); border: 1px solid var(--line-2); color: var(--text);
+    font-weight: 500; white-space: nowrap;
+  }
+  .btn:hover { background: #1a1f2a; border-color: #323a4b; }
+  .btn svg { color: var(--text-3); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { background: #e83a60; border-color: #e83a60; }
+  .btn.primary svg { color: rgba(255,255,255,.85); }
+  .btn.sq { width: 30px; padding: 0; justify-content: center; }
+  .btn.sm { height: 24px; padding: 0 8px; font-size: 12px; border-radius: var(--r-sm); }
+
+  .tabs { display: flex; gap: 4px; margin-top: 14px; }
+  .tab {
+    position: relative; height: 38px; padding: 0 10px; background: none; border: 0;
+    color: var(--text-3); font-weight: 500; display: inline-flex; align-items: center; gap: 7px;
+  }
+  .tab:hover { color: var(--text); }
+  .tab[aria-selected="true"] { color: var(--text); }
+  .tab[aria-selected="true"]::after {
+    content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px;
+    background: var(--accent); border-radius: 2px 2px 0 0;
+  }
+  .tab .count { font-size: 11px; color: var(--text-3); background: var(--raised); border-radius: 4px; padding: 0 5px; line-height: 17px; }
+  .tab:focus-visible { outline-offset: -2px; }
+
+  /* ---------- body ---------- */
+  .body { flex: 1; overflow: auto; padding: 20px 24px 24px; min-height: 0; }
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) 468px; gap: 20px; align-items: start; }
+  .col { display: grid; gap: 16px; min-width: 0; }
+
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+  .panel-h {
+    height: 42px; display: flex; align-items: center; gap: 10px; padding: 0 14px 0 16px;
+    border-bottom: 1px solid var(--line);
+  }
+  .panel-h h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.005em; }
+  .panel-h .aside { margin-left: auto; display: flex; align-items: center; gap: 10px; color: var(--text-3); font-size: 12px; }
+  .link { color: var(--text-2); text-decoration: none; font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
+  .link:hover { color: var(--text); }
+
+  /* config */
+  .config { display: grid; grid-template-columns: 1.05fr 1fr 0.95fr 1.15fr; }
+  .config section { padding: 14px 16px 16px; min-width: 0; }
+  .config section + section { border-left: 1px solid var(--line); }
+  .config h3 { margin: 0 0 10px; font-size: 12px; font-weight: 500; color: var(--text-3); }
+  .kv { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 7px 12px; }
+  .kv dt { color: var(--text-3); white-space: nowrap; }
+  .kv dd { margin: 0; text-align: right; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .kv dd.mono { font-size: 12px; }
+  .tag {
+    display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px;
+    font-family: var(--mono); font-size: 11px; color: var(--text-2); background: var(--raised); border: 1px solid var(--line-2);
+  }
+  .on { color: var(--ok); }
+
+  /* tables */
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    height: 32px; padding: 0 12px; text-align: left; white-space: nowrap;
+    font-weight: 500; font-size: 12px; color: var(--text-3);
+    border-bottom: 1px solid var(--line); background: var(--surface);
+  }
+  td { height: 40px; padding: 0 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  th:first-child, td:first-child { padding-left: 16px; }
+  th:last-child, td:last-child { padding-right: 16px; }
+  .r { text-align: right; }
+
+  .seg-name { font-family: var(--mono); font-size: 12px; color: var(--text); }
+  .flag {
+    display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0 7px; border-radius: 4px;
+    font-size: 12px; color: var(--warn); background: var(--warn-soft);
+  }
+  .warn-txt { color: var(--warn); font-weight: 500; }
+  .meter { display: flex; align-items: center; gap: 10px; }
+  .bar { position: relative; height: 4px; border-radius: 2px; background: #1f2431; overflow: hidden; flex: 1; }
+  .bar > i { position: absolute; inset: 0 auto 0 0; border-radius: 2px; background: #7b8496; }
+  .bar.lg { height: 6px; border-radius: 3px; }
+  .bar.lg > i { border-radius: 3px; }
+  .state { display: inline-flex; align-items: center; gap: 7px; color: var(--text-2); }
+
+  /* resources + quality */
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .res { padding: 14px 16px 16px; display: grid; gap: 16px; }
+  .res-row .lbl { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+  .res-row .lbl span:first-child { color: var(--text-2); }
+  .big { font-size: 15px; font-weight: 500; letter-spacing: -0.01em; }
+  .of { color: var(--text-3); font-size: 12px; }
+  .stack { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: #1f2431; gap: 2px; }
+  .stack i { display: block; height: 100%; }
+  .legend { display: flex; gap: 14px; margin-top: 8px; font-size: 12px; color: var(--text-3); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+
+  .quality { padding: 14px 16px 16px; }
+  .recall { display: flex; align-items: baseline; gap: 10px; }
+  .recall .v { font-size: 30px; line-height: 34px; font-weight: 500; letter-spacing: -0.03em; }
+  .recall .k { color: var(--text-2); }
+  .lat { margin: 14px 0 0; display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--line); }
+  .lat div { padding-top: 12px; }
+  .lat div + div { border-left: 1px solid var(--line); padding-left: 16px; }
+  .lat dt { color: var(--text-3); font-size: 12px; }
+  .lat dd { margin: 2px 0 0; font-size: 15px; font-weight: 500; }
+  .lat dd small { font-size: 12px; color: var(--text-3); font-weight: 400; margin-left: 2px; }
+  .note { margin-top: 12px; font-size: 12px; color: var(--text-3); }
+
+  /* points */
+  .points { table-layout: fixed; }
+  .points td { height: 28px; cursor: default; }
+  .points tbody tr { outline: none; }
+  .points tbody tr:hover td { background: var(--hover); }
+  .points tbody tr[aria-selected="true"] td { background: var(--accent-soft); }
+  .points tbody tr[aria-selected="true"] td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+  .points tbody tr:focus-visible td { box-shadow: inset 0 1px 0 var(--accent-line), inset 0 -1px 0 var(--accent-line); }
+  .points tbody tr:focus-visible td:first-child { box-shadow: inset 2px 0 0 var(--accent), inset 0 1px 0 var(--accent-line), inset 0 -1px 0 var(--accent-line); }
+  .points td.id { font-family: var(--mono); font-size: 12px; color: var(--text-2); }
+  .points tr[aria-selected="true"] td.id { color: var(--text); }
+  .points td.title { overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+  .points td.date { font-family: var(--mono); font-size: 12px; color: var(--text-3); }
+  .src { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); }
+  .src i { width: 6px; height: 6px; border-radius: 2px; display: inline-block; }
+  .src.notes i { background: #8fa3c7; }
+  .src.bookmarks i { background: #b39ad6; }
+  .src.mail i { background: #7fb8a8; }
+
+  .select {
+    height: 24px; padding: 0 8px; border-radius: var(--r-sm); display: inline-flex; align-items: center; gap: 6px;
+    background: var(--raised); border: 1px solid var(--line-2); color: var(--text-2); font-size: 12px;
+  }
+  .select:hover { color: var(--text); border-color: #323a4b; }
+
+  .tbl-foot {
+    display: flex; align-items: center; justify-content: space-between; height: 32px; padding: 0 14px 0 16px;
+    border-top: 1px solid var(--line); color: var(--text-3); font-size: 12px;
+  }
+  .tbl-foot .hint { display: inline-flex; align-items: center; gap: 6px; }
+
+  /* payload */
+  .seg-ctl { display: inline-flex; border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 1px; background: var(--ground); }
+  .seg-ctl button {
+    height: 20px; padding: 0 8px; border: 0; border-radius: 3px; background: none; color: var(--text-3); font-size: 12px;
+  }
+  .seg-ctl button[aria-pressed="true"] { background: var(--raised); color: var(--text); }
+  .code {
+    margin: 0; padding: 9px 0; overflow: auto;
+    font-family: var(--mono); font-size: 12.5px; line-height: 20px; color: var(--text-2);
+    counter-reset: ln; tab-size: 2;
+  }
+  .code .ln { display: block; padding: 0 16px 0 0; white-space: pre; }
+  .code .ln::before {
+    counter-increment: ln; content: counter(ln);
+    display: inline-block; width: 40px; padding-right: 14px; text-align: right;
+    color: #3c4354; user-select: none; font-variant-numeric: tabular-nums;
+  }
+  .j-key { color: #9cb4e0; }
+  .j-str { color: #a6d18f; }
+  .j-num { color: #e0b47a; }
+  .j-bool { color: #e58aa6; }
+  .j-null { color: #e58aa6; font-style: italic; }
+  .j-p { color: #5d6577; }
+  .payload-foot {
+    margin: 0; border-top: 1px solid var(--line); padding: 9px 16px 10px; display: grid; gap: 6px; font-size: 12px;
+  }
+  .payload-foot .row { display: flex; gap: 12px; align-items: baseline; }
+  .payload-foot .row dt { color: var(--text-3); width: 52px; flex: none; }
+  .payload-foot .row dd { margin: 0; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
+
+  .placeholder { padding: 48px 0; color: var(--text-3); text-align: center; }
+  [hidden] { display: none !important; }
+
+  .copied { color: var(--ok); }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ============ sidebar ============ -->
+  <aside class="side" aria-label="Collections and navigation">
+    <div class="brand">
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+        <circle cx="9" cy="9" r="7.25" fill="none" stroke="#e5e7eb" stroke-width="1.5"/>
+        <path d="M9 1.75a7.25 7.25 0 0 1 0 14.5a4.6 7.25 0 0 0 0-14.5z" fill="#dc244c"/>
+      </svg>
+      <b>nocturnum</b>
+      <span class="ver">0.9.2</span>
+    </div>
+
+    <div class="side-scroll">
+      <div class="side-h">
+        <span>Collections</span>
+        <button class="icon-btn" aria-label="New collection" title="New collection">
+          <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <ul class="coll">
+        <li><a href="#" aria-current="page"><span class="nm"><i class="dot" aria-hidden="true"></i><span>notes-768</span></span><span class="ct num">48.2k</span></a></li>
+        <li><a href="#"><span class="nm"><i class="dot" aria-hidden="true"></i><span>bookmarks-384</span></span><span class="ct num">12.9k</span></a></li>
+        <li><a href="#"><span class="nm"><i class="dot" aria-hidden="true"></i><span>faces-512</span></span><span class="ct num">3.6k</span></a></li>
+        <li><a href="#"><span class="nm"><i class="dot" aria-hidden="true"></i><span>mail-1024</span></span><span class="ct num">91.4k</span></a></li>
+      </ul>
+
+      <div class="side-h"><span>Engine</span></div>
+      <ul class="nav">
+        <li><a href="#"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="2" y="2" width="10" height="4" rx="1"/><rect x="2" y="8" width="10" height="4" rx="1"/></svg>Cluster</a></li>
+        <li><a href="#"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2 4.5h10v7H2z"/><path d="M4.5 4.5l1-2h3l1 2"/></svg>Snapshots</a></li>
+        <li><a href="#"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2 11l3-4 2.5 2L12 3"/></svg>Telemetry</a></li>
+        <li><a href="#"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3 3.5h8M3 7h8M3 10.5h5"/></svg>Logs</a></li>
+        <li><a href="#"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="5" cy="7" r="2.5"/><path d="M7.5 7H12M10.5 7v2"/></svg>API keys</a></li>
+      </ul>
+    </div>
+
+    <div class="side-foot">
+      <div class="row"><span>Node</span><span>node-1</span></div>
+      <div class="row"><span>Uptime</span><span class="num">18 d 4 h</span></div>
+      <div class="row"><span>REST</span><span class="mono" style="font-size:11px">:6333</span></div>
+    </div>
+  </aside>
+
+  <!-- ============ main ============ -->
+  <div class="main">
+    <header class="top">
+      <nav class="crumbs" aria-label="Breadcrumb">
+        <a href="#">Collections</a>
+        <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M4.5 2.5L8 6l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+        <span class="cur">notes-768</span>
+      </nav>
+
+      <label class="search">
+        <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M9.2 9.2L12 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        <input id="search" type="search" placeholder="Search collections, point ids, payload" aria-label="Search">
+        <kbd>/</kbd>
+      </label>
+
+      <div class="top-right">
+        <button class="cluster" aria-label="Cluster status: healthy, 1 node, WAL synced">
+          <i class="dot" aria-hidden="true"></i>
+          <span>Healthy</span>
+          <span class="sep" aria-hidden="true"></span>
+          <span class="dim">1 node</span>
+          <span class="sep" aria-hidden="true"></span>
+          <span class="dim num">WAL synced 2 s ago</span>
+        </button>
+        <span class="demo-tag">synthetic demo data</span>
+      </div>
+    </header>
+
+    <div class="head">
+      <div class="head-row">
+        <div>
+          <div class="title">
+            <h1>notes-768</h1>
+            <span class="pill ok"><i class="dot" aria-hidden="true"></i>ok</span>
+          </div>
+          <div class="meta">
+            <span class="num">48,210 points</span>
+            <span>1 dense vector <code>text</code></span>
+            <span class="num">768 dims, cosine, float32</span>
+            <span class="num">Created 2026-06-02</span>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2.5 7a4.5 4.5 0 0 1 8-2.8M11.5 7a4.5 4.5 0 0 1-8 2.8"/><path d="M10.5 1.8v2.6H7.9M3.5 12.2V9.6h2.6"/></svg>Run optimizer</button>
+          <button class="btn primary"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2 4.5h10v7H2z"/><path d="M4.5 4.5l1-2h3l1 2"/><circle cx="7" cy="8" r="1.6"/></svg>Create snapshot</button>
+          <button class="btn sq" aria-label="More actions"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="3" cy="7" r="1.1" fill="currentColor"/><circle cx="7" cy="7" r="1.1" fill="currentColor"/><circle cx="11" cy="7" r="1.1" fill="currentColor"/></svg></button>
+        </div>
+      </div>
+
+      <div class="tabs" role="tablist" aria-label="Collection views">
+        <button class="tab" role="tab" id="t-overview" aria-controls="p-overview" aria-selected="true" tabindex="0">Overview</button>
+        <button class="tab" role="tab" id="t-points" aria-controls="p-points" aria-selected="false" tabindex="-1">Points <span class="count num">48,210</span></button>
+        <button class="tab" role="tab" id="t-query" aria-controls="p-query" aria-selected="false" tabindex="-1">Query</button>
+        <button class="tab" role="tab" id="t-snapshots" aria-controls="p-snapshots" aria-selected="false" tabindex="-1">Snapshots <span class="count num">6</span></button>
+      </div>
+    </div>
+
+    <main class="body">
+      <div id="p-overview" role="tabpanel" aria-labelledby="t-overview">
+        <div class="grid">
+
+          <!-- left: overview -->
+          <div class="col">
+
+            <section class="panel" aria-labelledby="h-config">
+              <div class="panel-h">
+                <h2 id="h-config">Configuration</h2>
+                <div class="aside"><a class="link" href="#">Edit</a></div>
+              </div>
+              <div class="config">
+                <section>
+                  <h3>Vector <span class="mono" style="color:var(--text-2)">text</span></h3>
+                  <dl class="kv">
+                    <dt>Dimensions</dt><dd class="num">768</dd>
+                    <dt>Distance</dt><dd>Cosine</dd>
+                    <dt>Datatype</dt><dd class="mono">float32</dd>
+                    <dt>Storage</dt><dd>mmap</dd>
+                  </dl>
+                </section>
+                <section>
+                  <h3>HNSW index</h3>
+                  <dl class="kv">
+                    <dt class="mono" style="font-size:12px">m</dt><dd class="num">16</dd>
+                    <dt class="mono" style="font-size:12px">ef_construct</dt><dd class="num">100</dd>
+                    <dt class="mono" style="font-size:12px">ef</dt><dd class="num">128</dd>
+                    <dt>On disk</dt><dd>No</dd>
+                  </dl>
+                </section>
+                <section>
+                  <h3>Quantization</h3>
+                  <dl class="kv">
+                    <dt>Type</dt><dd>Scalar</dd>
+                    <dt>Format</dt><dd class="mono">int8</dd>
+                    <dt>Rescore</dt><dd class="on">On</dd>
+                    <dt>In RAM</dt><dd>Always</dd>
+                  </dl>
+                </section>
+                <section>
+                  <h3>Payload indexes</h3>
+                  <dl class="kv">
+                    <dt class="mono" style="font-size:12px">source</dt><dd><span class="tag">keyword</span></dd>
+                    <dt class="mono" style="font-size:12px">tags</dt><dd><span class="tag">keyword</span></dd>
+                    <dt class="mono" style="font-size:12px">created_at</dt><dd><span class="tag">datetime</span></dd>
+                    <dt class="mono" style="font-size:12px">pinned</dt><dd><span class="tag">bool</span></dd>
+                  </dl>
+                </section>
+              </div>
+            </section>
+
+            <section class="panel" aria-labelledby="h-seg">
+              <div class="panel-h">
+                <h2 id="h-seg">Segments</h2>
+                <span class="dim num">3</span>
+                <div class="aside">
+                  <span class="flag">
+                    <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1.5l5 9H1z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M6 5v2.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="6" cy="8.9" r=".7" fill="currentColor"/></svg>
+                    1 segment needs vacuum
+                  </span>
+                </div>
+              </div>
+              <table class="num">
+                <thead>
+                  <tr>
+                    <th scope="col">Segment</th>
+                    <th scope="col">Type</th>
+                    <th scope="col">Index</th>
+                    <th scope="col" class="r">Points</th>
+                    <th scope="col" class="r">Deleted</th>
+                    <th scope="col" class="r">Disk</th>
+                    <th scope="col">State</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><span class="seg-name">seg-a</span></td>
+                    <td class="muted">Indexed</td>
+                    <td class="muted">HNSW</td>
+                    <td class="r">21,400</td>
+                    <td class="r muted">1.4%</td>
+                    <td class="r muted">1.48 GB</td>
+                    <td><span class="state"><i class="dot" aria-hidden="true"></i>Ready</span></td>
+                  </tr>
+                  <tr>
+                    <td><span class="seg-name">seg-b</span></td>
+                    <td class="muted">Indexed</td>
+                    <td class="muted">HNSW</td>
+                    <td class="r">19,880</td>
+                    <td class="r"><span class="warn-txt">23.0%</span></td>
+                    <td class="r muted">1.39 GB</td>
+                    <td>
+                      <div class="meter" style="justify-content:space-between">
+                        <span class="state" style="color:var(--warn)" title="Deleted points are above the 20% vacuum threshold"><i class="dot warn" aria-hidden="true"></i>Over 20%</span>
+                        <button class="btn sm">Vacuum</button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><span class="seg-name">seg-c</span></td>
+                    <td class="muted">Appendable</td>
+                    <td class="muted">Plain</td>
+                    <td class="r">6,930</td>
+                    <td class="r muted">0.2%</td>
+                    <td class="r muted">0.53 GB</td>
+                    <td>
+                      <div class="meter" title="61% of the indexing threshold">
+                        <div class="bar" style="max-width:76px" role="progressbar" aria-label="Progress to indexing threshold" aria-valuenow="61" aria-valuemin="0" aria-valuemax="100"><i style="width:61%"></i></div>
+                        <span class="muted" style="font-size:12px">61% to index</span>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </section>
+
+            <div class="pair">
+              <section class="panel" aria-labelledby="h-res">
+                <div class="panel-h"><h2 id="h-res">Resources</h2><div class="aside">this collection</div></div>
+                <div class="res num">
+                  <div class="res-row">
+                    <div class="lbl"><span>RAM</span><span><span class="big">1.12</span> <span class="of">of 2.00 GB</span></span></div>
+                    <div class="stack" role="img" aria-label="RAM 1.12 of 2.00 GB: HNSW graph 0.58, int8 vectors 0.37, payload indexes 0.17">
+                      <i style="width:29%;background:#8fa3c7"></i><i style="width:18.5%;background:#6c7d9c"></i><i style="width:8.5%;background:#4d5a73"></i>
+                    </div>
+                    <div class="legend">
+                      <span><i style="background:#8fa3c7"></i>Graph 0.58</span>
+                      <span><i style="background:#6c7d9c"></i>int8 0.37</span>
+                      <span><i style="background:#4d5a73"></i>Payload 0.17</span>
+                    </div>
+                  </div>
+                  <div class="res-row">
+                    <div class="lbl"><span>Disk</span><span><span class="big">3.4</span> <span class="of">of 20 GB</span></span></div>
+                    <div class="bar lg" role="progressbar" aria-label="Disk used" aria-valuenow="17" aria-valuemin="0" aria-valuemax="100"><i style="width:17%"></i></div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="panel" aria-labelledby="h-q">
+                <div class="panel-h"><h2 id="h-q">Search quality</h2><div class="aside"><a class="link" href="#">Re-run</a></div></div>
+                <div class="quality num">
+                  <div class="recall">
+                    <span class="v">0.987</span>
+                    <span class="k">recall@10 at <span class="mono">ef</span> 128</span>
+                  </div>
+                  <dl class="lat">
+                    <div><dt>p50 latency</dt><dd>3.1<small>ms</small></dd></div>
+                    <div><dt>p99 latency</dt><dd>9.8<small>ms</small></dd></div>
+                  </dl>
+                  <div class="note">500 sampled queries checked against exact search 14 min ago</div>
+                </div>
+              </section>
+            </div>
+          </div>
+
+          <!-- right: points + payload -->
+          <div class="col">
+            <section class="panel" aria-labelledby="h-pts">
+              <div class="panel-h">
+                <h2 id="h-pts">Points</h2>
+                <span class="dim num">48,210</span>
+                <div class="aside">
+                  <button class="select">source: any <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 4l2.5 2.5L7.5 4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
+                  <button class="select">Newest first <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 4l2.5 2.5L7.5 4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
+                </div>
+              </div>
+              <table class="points num" role="grid" aria-label="Points, newest first">
+                <thead>
+                  <tr>
+                    <th scope="col" style="width:64px">id</th>
+                    <th scope="col" style="width:104px">source</th>
+                    <th scope="col">title</th>
+                    <th scope="col" class="r" style="width:100px">created_at</th>
+                  </tr>
+                </thead>
+                <tbody id="rows"></tbody>
+              </table>
+              <div class="tbl-foot">
+                <span class="num">1 to 10 of 48,210</span>
+                <span class="hint"><kbd>↑</kbd><kbd>↓</kbd> move <kbd>/</kbd> search</span>
+              </div>
+            </section>
+
+            <section class="panel" aria-labelledby="h-pl">
+              <div class="panel-h">
+                <h2 id="h-pl">Point <span class="mono" id="pl-id" style="font-size:13px;font-weight:500">41207</span></h2>
+                <span class="dim">in <span class="mono" id="pl-seg">seg-c</span></span>
+                <div class="aside">
+                  <div class="seg-ctl" role="group" aria-label="Pane view">
+                    <button aria-pressed="true" id="v-payload">Payload</button>
+                    <button aria-pressed="false" id="v-vector">Vector</button>
+                  </div>
+                  <button class="icon-btn" id="copy" aria-label="Copy JSON" title="Copy JSON">
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="4.5" y="4.5" width="7" height="7" rx="1.2"/><path d="M9.5 4.5V3.2c0-.7-.5-1.2-1.2-1.2H3.2C2.5 2 2 2.5 2 3.2v5.1c0 .7.5 1.2 1.2 1.2h1.3"/></svg>
+                  </button>
+                </div>
+              </div>
+              <pre class="code" id="json" tabindex="0" aria-label="Payload JSON"></pre>
+              <dl class="payload-foot">
+                <div class="row"><dt>Vector</dt><dd id="pl-vec">[0.0213, -0.0841, 0.1172, 0.0067, ...] 764 more</dd></div>
+              </dl>
+            </section>
+          </div>
+        </div>
+      </div>
+
+      <div id="p-points" role="tabpanel" aria-labelledby="t-points" hidden><div class="placeholder">The full points browser opens on this tab, with filters and paging over all 48,210 points.</div></div>
+      <div id="p-query" role="tabpanel" aria-labelledby="t-query" hidden><div class="placeholder">Run a vector or filtered query against notes-768 from here.</div></div>
+      <div id="p-snapshots" role="tabpanel" aria-labelledby="t-snapshots" hidden><div class="placeholder">6 snapshots stored, the latest from 2026-10-10 03:00.</div></div>
+    </main>
+  </div>
+</div>
+
+<script>
+  const points = [
+    { id: 41207, seg: "seg-c", payload: { source: "notes", tags: ["rust", "wal"], created_at: "2026-09-28T21:14:00Z", title: "Group commit notes", pinned: false }, vec: [0.0213, -0.0841, 0.1172, 0.0067] },
+    { id: 41188, seg: "seg-c", payload: { source: "bookmarks", tags: ["storage", "reading"], created_at: "2026-09-27T08:42:10Z", title: "Gridstore article", pinned: true, url: "https://example.org/gridstore" }, vec: [-0.0412, 0.0533, 0.0981, -0.1204] },
+    { id: 40977, seg: "seg-b", payload: { source: "mail", tags: ["ops"], created_at: "2026-09-24T06:00:03Z", title: "Snapshot schedule", pinned: false }, vec: [0.0875, -0.0129, -0.0346, 0.0712] },
+    { id: 40951, seg: "seg-b", payload: { source: "notes", tags: ["hnsw", "math"], created_at: "2026-09-23T19:31:45Z", title: "HNSW level rounding", pinned: true }, vec: [0.1033, 0.0258, -0.0617, -0.0094] },
+    { id: 40930, seg: "seg-b", payload: { source: "notes", tags: ["mmap", "linux"], created_at: "2026-09-22T22:05:12Z", title: "Mmap readahead tuning", pinned: false }, vec: [-0.0067, 0.0794, 0.0451, 0.1186] },
+    { id: 40912, seg: "seg-b", payload: { source: "bookmarks", tags: ["quantization"], created_at: "2026-09-21T13:17:58Z", title: "Product quantization primer", pinned: false }, vec: [0.0322, -0.1011, 0.0076, 0.0563] },
+    { id: 40874, seg: "seg-b", payload: { source: "mail", tags: ["backup", "weekly"], created_at: "2026-09-20T07:00:00Z", title: "Backup report, week 38", pinned: false }, vec: [-0.0588, -0.0230, 0.0914, 0.0149] },
+    { id: 40850, seg: "seg-a", payload: { source: "notes", tags: ["payload", "index"], created_at: "2026-09-19T17:48:26Z", title: "Payload index on tags", pinned: false }, vec: [0.0741, 0.0612, -0.0278, -0.0855] },
+    { id: 40811, seg: "seg-a", payload: { source: "bookmarks", tags: ["bitmaps", "reading"], created_at: "2026-09-18T11:09:33Z", title: "Roaring bitmaps explained", pinned: false }, vec: [-0.0197, 0.1129, 0.0402, -0.0331] },
+    { id: 40795, seg: "seg-a", payload: { source: "notes", tags: ["rust", "wal"], created_at: "2026-09-17T23:52:07Z", title: "WAL segment rotation", pinned: false }, vec: [0.0469, -0.0703, -0.1068, 0.0215] }
+  ];
+
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const P = s => `<span class="j-p">${s}</span>`;
+
+  function val(v) {
+    if (v === null) return `<span class="j-null">null</span>`;
+    if (typeof v === "boolean") return `<span class="j-bool">${v}</span>`;
+    if (typeof v === "number") return `<span class="j-num">${v}</span>`;
+    if (Array.isArray(v)) return P("[") + v.map(val).join(P(", ")) + P("]");
+    return `<span class="j-str">"${esc(v)}"</span>`;
+  }
+  function renderJSON(obj) {
+    const keys = Object.keys(obj);
+    const lines = [P("{")];
+    keys.forEach((k, i) => {
+      lines.push(`  <span class="j-key">"${esc(k)}"</span>${P(":")} ${val(obj[k])}${i < keys.length - 1 ? P(",") : ""}`);
+    });
+    lines.push(P("}"));
+    return lines.map(l => `<span class="ln">${l}</span>`).join("");
+  }
+  function renderVector(p) {
+    const lines = [P("{")];
+    lines.push(`  <span class="j-key">"text"</span>${P(":")} ${P("[")}`);
+    const more = [...p.vec, +(p.vec[0] * -0.61).toFixed(4), +(p.vec[2] * 0.83).toFixed(4), +(p.vec[1] * 1.27).toFixed(4), +(p.vec[3] * -0.44).toFixed(4)];
+    lines.push("    " + more.slice(0, 4).map(val).join(P(", ")) + P(","));
+    lines.push("    " + more.slice(4).map(val).join(P(", ")) + P(","));
+    lines.push(`    <span class="j-p">// 760 more of 768, float32</span>`);
+    lines.push("  " + P("]"));
+    lines.push(P("}"));
+    return lines.map(l => `<span class="ln">${l}</span>`).join("");
+  }
+
+  const tbody = document.getElementById("rows");
+  tbody.innerHTML = points.map((p, i) => `
+    <tr data-i="${i}" tabindex="${i === 0 ? 0 : -1}" aria-selected="${i === 0}">
+      <td class="id">${p.id}</td>
+      <td><span class="src ${p.payload.source}"><i aria-hidden="true"></i>${p.payload.source}</span></td>
+      <td class="title" title="${esc(p.payload.title)}">${esc(p.payload.title)}</td>
+      <td class="date r">${p.payload.created_at.slice(0, 10)}</td>
+    </tr>`).join("");
+
+  const jsonEl = document.getElementById("json");
+  let current = 0, view = "payload";
+
+  function show(i, focus) {
+    current = i;
+    const rows = tbody.querySelectorAll("tr");
+    rows.forEach((r, j) => { r.setAttribute("aria-selected", j === i); r.tabIndex = j === i ? 0 : -1; });
+    if (focus) rows[i].focus();
+    const p = points[i];
+    document.getElementById("pl-id").textContent = p.id;
+    document.getElementById("pl-seg").textContent = p.seg;
+    document.getElementById("pl-vec").textContent = `[${p.vec.join(", ")}, ...] 764 more`;
+    jsonEl.innerHTML = view === "payload" ? renderJSON(p.payload) : renderVector(p);
+  }
+
+  tbody.addEventListener("click", e => { const tr = e.target.closest("tr"); if (tr) show(+tr.dataset.i, true); });
+  tbody.addEventListener("keydown", e => {
+    const keys = { ArrowDown: 1, ArrowUp: -1, j: 1, k: -1 };
+    if (e.key in keys) { e.preventDefault(); show(Math.min(points.length - 1, Math.max(0, current + keys[e.key])), true); }
+    else if (e.key === "Home") { e.preventDefault(); show(0, true); }
+    else if (e.key === "End") { e.preventDefault(); show(points.length - 1, true); }
+  });
+
+  const vP = document.getElementById("v-payload"), vV = document.getElementById("v-vector");
+  [vP, vV].forEach(b => b.addEventListener("click", () => {
+    view = b === vP ? "payload" : "vector";
+    vP.setAttribute("aria-pressed", view === "payload");
+    vV.setAttribute("aria-pressed", view === "vector");
+    jsonEl.setAttribute("aria-label", view === "payload" ? "Payload JSON" : "Vector JSON");
+    show(current, false);
+  }));
+
+  document.getElementById("copy").addEventListener("click", e => {
+    const btn = e.currentTarget;
+    const text = JSON.stringify(points[current].payload, null, 2);
+    (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).catch(() => {});
+    btn.classList.add("copied"); btn.title = "Copied";
+    setTimeout(() => { btn.classList.remove("copied"); btn.title = "Copy JSON"; }, 1200);
+  });
+
+  // tabs with roving focus
+  const tabs = [...document.querySelectorAll('[role="tab"]')];
+  function selectTab(t, focus) {
+    tabs.forEach(x => {
+      const on = x === t;
+      x.setAttribute("aria-selected", on); x.tabIndex = on ? 0 : -1;
+      document.getElementById(x.getAttribute("aria-controls")).hidden = !on;
+    });
+    if (focus) t.focus();
+  }
+  tabs.forEach((t, i) => {
+    t.addEventListener("click", () => selectTab(t, false));
+    t.addEventListener("keydown", e => {
+      let n = null;
+      if (e.key === "ArrowRight") n = (i + 1) % tabs.length;
+      if (e.key === "ArrowLeft") n = (i - 1 + tabs.length) % tabs.length;
+      if (e.key === "Home") n = 0;
+      if (e.key === "End") n = tabs.length - 1;
+      if (n !== null) { e.preventDefault(); selectTab(tabs[n], true); }
+    });
+  });
+
+  // "/" focuses search
+  const search = document.getElementById("search");
+  document.addEventListener("keydown", e => {
+    if (e.key === "/" && document.activeElement !== search) { e.preventDefault(); search.focus(); }
+    if (e.key === "Escape" && document.activeElement === search) search.blur();
+  });
+
+  show(0, false);
+</script>
+</body>
+</html>
