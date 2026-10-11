@@ -380,8 +380,11 @@ dependencies = [
  "nocturnum-core",
  "nocturnum-index",
  "nocturnum-storage",
+ "proptest",
  "roaring",
  "serde_json",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]
@@ -401,8 +404,10 @@ dependencies = [
  "libc",
  "memmap2",
  "nocturnum-core",
+ "nocturnum-index",
  "nocturnum-storage",
  "proptest",
+ "roaring",
  "serde",
  "serde_json",
  "tempfile",

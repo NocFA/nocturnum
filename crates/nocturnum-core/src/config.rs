@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::payload::JsonPath;
 use crate::vector::Distance;
 
 /// The largest vector dimension a collection accepts.
@@ -38,6 +39,14 @@ pub enum PayloadIndexKind {
     Float,
     /// Booleans, for `match`, `any` and `except` on booleans.
     Bool,
+}
+
+/// One payload index: a field and the kind of index it gets.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PayloadIndexSpec {
+    pub path: JsonPath,
+    pub kind: PayloadIndexKind,
 }
 
 #[cfg(test)]

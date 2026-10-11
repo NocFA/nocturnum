@@ -388,6 +388,136 @@ enum Step {
     Reopen,
 }
 
+fn keyword(path: &str) -> PayloadIndexSpec {
+    PayloadIndexSpec {
+        path: path.parse().unwrap(),
+        kind: nocturnum_core::PayloadIndexKind::Keyword,
+    }
+}
+
+/// The ids of live rows each segment's index says match `colour == value`.
+fn indexed_matches(shard: &Shard, value: &str) -> Vec<PointId> {
+    let f: nocturnum_core::Filter =
+        serde_json::from_value(json!({"must": [{"key": "colour", "match": value}]})).unwrap();
+    let view = shard.view();
+    let mut ids = Vec::new();
+    for seg in view.segments() {
+        let mut b = seg.payload_index().bounds(&f);
+        b.restrict(seg.live());
+        assert!(b.is_exact(), "segment {} needed payload reads", seg.id());
+        ids.extend(b.sure.iter().map(|row| seg.point(row).id));
+    }
+    ids.sort();
+    ids
+}
+
+#[test]
+fn payload_indexes_cover_every_segment_and_survive_reopen() {
+    let dir = TempDir::new().unwrap();
+    let shard = create(dir.path());
+    upsert(
+        &shard,
+        vec![
+            point(1, 0.0, json!({"colour": "red"})),
+            point(2, 0.0, json!({"colour": "blue"})),
+        ],
+    );
+    shard.flush().unwrap();
+
+    // Created after a segment exists, so that segment is rebuilt.
+    assert!(shard.create_payload_index(keyword("colour")).unwrap());
+    assert!(!shard.create_payload_index(keyword("colour")).unwrap());
+    assert_eq!(indexed_matches(&shard, "red"), [PointId::Num(1)]);
+
+    // A newer copy hides the old row, and the next flush indexes the new segment.
+    upsert(
+        &shard,
+        vec![
+            point(2, 0.0, json!({"colour": "red"})),
+            point(3, 0.0, json!({"colour": "red"})),
+        ],
+    );
+    shard.flush().unwrap();
+    assert_eq!(
+        indexed_matches(&shard, "red"),
+        [PointId::Num(1), PointId::Num(2), PointId::Num(3)]
+    );
+    drop(shard);
+
+    let shard = reopen(dir.path());
+    assert_eq!(shard.payload_indexes(), [keyword("colour")]);
+    assert_eq!(shard.view().payload_indexes(), [keyword("colour")]);
+    assert_eq!(indexed_matches(&shard, "red").len(), 3);
+    assert!(shard.drop_payload_index(&keyword("colour")).unwrap());
+    assert!(!shard.drop_payload_index(&keyword("colour")).unwrap());
+    drop(shard);
+    assert!(reopen(dir.path()).payload_indexes().is_empty());
+}
+
+#[test]
+fn segment_views_and_recent_points_hold_every_point_once() {
+    let dir = TempDir::new().unwrap();
+    let shard = create(dir.path());
+    upsert(
+        &shard,
+        vec![point(1, 1.0, json!({})), point(2, 2.0, json!({}))],
+    );
+    shard.flush().unwrap();
+    upsert(
+        &shard,
+        vec![
+            point(2, 5.0, json!({"new": true})),
+            point(3, 3.0, json!({})),
+        ],
+    );
+    let view = shard.view();
+    let recent: Vec<_> = view.recent().map(|p| p.id).collect();
+    assert_eq!(recent, [PointId::Num(2), PointId::Num(3)]);
+    let seg = view.segments().next().unwrap();
+    assert_eq!(seg.rows(), 2);
+    let live: Vec<_> = seg.live().iter().map(|r| seg.point(r).id).collect();
+    assert_eq!(live, [PointId::Num(1)]);
+    assert_eq!(seg.point(1).vector, [2.0, 3.0, 4.0]);
+    assert_eq!(seg.vectors().len(), 2 * DIM);
+    assert_eq!(
+        view.get(PointId::Num(2)).unwrap().unwrap().payload,
+        payload(json!({"new": true}))
+    );
+}
+
+#[test]
+fn write_with_builds_the_operation_from_a_view_under_the_write_lock() {
+    let dir = TempDir::new().unwrap();
+    let shard = create(dir.path());
+    upsert(
+        &shard,
+        vec![
+            point(1, 0.0, json!({"k": 1})),
+            point(2, 0.0, json!({"k": 2})),
+        ],
+    );
+    let seq = shard
+        .write_with(Ack::Durable, |view| {
+            let ids = view
+                .points()
+                .filter(|p| p.payload().unwrap().0["k"] == json!(2))
+                .map(|p| p.id)
+                .collect();
+            Ok(Operation::Delete(ids))
+        })
+        .unwrap();
+    assert_eq!(seq, 2);
+    assert_eq!(
+        contents(&shard).keys().collect::<Vec<_>>(),
+        [&PointId::Num(1)]
+    );
+
+    // A failure while building logs nothing.
+    let err = shard.write_with(Ack::Durable, |_| Err(Error::Invalid("no".into())));
+    assert!(matches!(err, Err(WriteError::Storage(Error::Invalid(_)))));
+    assert_eq!(upsert(&shard, vec![point(3, 0.0, json!({}))]), 3);
+}
+
 fn apply_model(model: &mut BTreeMap<PointId, Record>, op: &Operation) {
     match op {
         Operation::Upsert(points) => {

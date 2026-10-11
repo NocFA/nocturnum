@@ -13,7 +13,7 @@ use std::fs::{self, File};
 use std::io::{ErrorKind, Write};
 use std::path::Path;
 
-use nocturnum_core::VectorConfig;
+use nocturnum_core::{PayloadIndexSpec, VectorConfig};
 use serde::{Deserialize, Serialize};
 
 use crate::crash::crash_point;
@@ -40,6 +40,10 @@ pub struct Manifest {
     pub next_segment_id: u64,
     /// Live segments, oldest first. A point's newest copy is in the last segment holding it.
     pub segments: Vec<u64>,
+    /// The payload indexes every segment builds in memory when it is loaded, see
+    /// `docs/decisions/0003-payload-indexes.md`. Left out of the file when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub payload_indexes: Vec<PayloadIndexSpec>,
 }
 
 impl Manifest {
@@ -52,6 +56,7 @@ impl Manifest {
             wal_upto: 0,
             next_segment_id: 1,
             segments: Vec::new(),
+            payload_indexes: Vec::new(),
         }
     }
 
@@ -122,7 +127,24 @@ mod tests {
         m.wal_upto = 99;
         m.segments = vec![1, 2, 5];
         m.next_segment_id = 6;
+        m.payload_indexes = vec![PayloadIndexSpec {
+            path: "a.b".parse().unwrap(),
+            kind: nocturnum_core::PayloadIndexKind::Keyword,
+        }];
         m
+    }
+
+    #[test]
+    fn no_payload_indexes_leaves_the_field_out() {
+        let dir = TempDir::new().unwrap();
+        let m = Manifest::new(VectorConfig {
+            dim: 2,
+            distance: Distance::Dot,
+        });
+        m.write(dir.path()).unwrap();
+        let text = fs::read_to_string(dir.path().join(FILE_NAME)).unwrap();
+        assert!(!text.contains("payload_indexes"), "{text}");
+        assert_eq!(Manifest::read(dir.path()).unwrap(), Some(m));
     }
 
     #[test]

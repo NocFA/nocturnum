@@ -42,13 +42,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 
-use nocturnum_core::{Ack, Payload, PointId, VectorConfig};
+use nocturnum_core::{Ack, Payload, PayloadIndexSpec, PointId, VectorConfig};
+use nocturnum_index::PayloadIndex;
+use roaring::RoaringBitmap;
 
 use crate::crash::crash_point;
 use crate::error::{Error, IoContext, Result};
 use crate::manifest::Manifest;
 use crate::op::{Operation, PointWrite};
-use crate::segment::{EntryIn, Segment, segment_dir_name, write_segment};
+use crate::segment::{Entry, EntryIn, Segment, segment_dir_name, write_segment};
 use crate::sync::{create_dir_all_durable, sync_dir};
 use crate::wal::{PeriodicSync, Wal, WalOptions};
 
@@ -106,27 +108,59 @@ enum Loc {
 
 struct Slot {
     segment: Arc<Segment>,
-    /// One bit per row, set while that row holds its point's newest copy.
-    live: Vec<u64>,
-    live_rows: usize,
+    /// Rows that hold their point's newest copy.
+    live: RoaringBitmap,
+    /// Each row's entry, by row.
+    rows: Vec<Entry>,
+    payload_index: Arc<PayloadIndex>,
 }
 
 impl Slot {
-    fn is_live(&self, row: u32) -> bool {
-        self.live[row as usize / 64] & (1 << (row % 64)) != 0
+    /// A slot for a freshly loaded segment, with no rows live yet.
+    fn new(segment: Arc<Segment>, indexes: &[PayloadIndexSpec]) -> Result<Slot> {
+        let rows = segment_rows(&segment);
+        let payload_index = Arc::new(build_payload_index(&segment, &rows, indexes)?);
+        Ok(Slot {
+            segment,
+            live: RoaringBitmap::new(),
+            rows,
+            payload_index,
+        })
     }
 
     fn set_live(&mut self, row: u32, on: bool) {
-        let word = &mut self.live[row as usize / 64];
-        let bit = 1u64 << (row % 64);
-        if on && *word & bit == 0 {
-            *word |= bit;
-            self.live_rows += 1;
-        } else if !on && *word & bit != 0 {
-            *word &= !bit;
-            self.live_rows -= 1;
+        if on {
+            self.live.insert(row);
+        } else {
+            self.live.remove(row);
         }
     }
+}
+
+/// A segment's entries by row, deletions left out.
+fn segment_rows(segment: &Segment) -> Vec<Entry> {
+    let mut rows: Vec<Entry> = segment
+        .entries()
+        .iter()
+        .filter(|e| e.row.is_some())
+        .copied()
+        .collect();
+    rows.sort_by_key(|e| e.row);
+    rows
+}
+
+fn build_payload_index(
+    segment: &Segment,
+    rows: &[Entry],
+    indexes: &[PayloadIndexSpec],
+) -> Result<PayloadIndex> {
+    let schema: Vec<_> = indexes.iter().map(|s| (s.path.clone(), s.kind)).collect();
+    PayloadIndex::build(
+        rows.len() as u32,
+        &schema,
+        rows.iter().map(|e| (e.row.expect("rows have rows"), e.id)),
+        |row| segment.payload(row),
+    )
 }
 
 struct State {
@@ -139,6 +173,9 @@ struct State {
     slots: Vec<Slot>,
     index: HashMap<PointId, Loc>,
     last_applied: u64,
+    /// The manifest's list of payload indexes, kept here too so reading it never waits for
+    /// the flush lock, which a flush holds for as long as it takes to write a segment.
+    payload_indexes: Vec<PayloadIndexSpec>,
 }
 
 impl State {
@@ -398,15 +435,13 @@ impl Shard {
             slots: Vec::new(),
             index: HashMap::new(),
             last_applied: manifest.wal_upto,
+            payload_indexes: manifest.payload_indexes.clone(),
         };
         for (id, name) in manifest.segments.iter().zip(&listed) {
             let segment = Segment::open(&seg_root.join(name), *id, config.dim)?;
-            let rows = segment.rows();
-            state.slots.push(Slot {
-                segment: Arc::new(segment),
-                live: vec![0; rows.div_ceil(64)],
-                live_rows: 0,
-            });
+            state
+                .slots
+                .push(Slot::new(Arc::new(segment), &manifest.payload_indexes)?);
             let slot_index = state.slots.len() - 1;
             let entries: Vec<_> = state.slots[slot_index].segment.entries().to_vec();
             for e in entries {
@@ -456,7 +491,25 @@ impl Shard {
 
     /// Checks, logs and applies an operation, returning its sequence number once it has
     /// reached `ack`.
-    pub fn write(&self, mut op: Operation, ack: Ack) -> Result<u64, WriteError> {
+    pub fn write(&self, op: Operation, ack: Ack) -> Result<u64, WriteError> {
+        let op = self.check(op)?;
+        self.commit(ack, |_| Ok(op))
+    }
+
+    /// Like [`Shard::write`] for an operation that depends on the current points, such as a
+    /// deletion by filter: `build` sees a view of the shard and returns the operation, and
+    /// both happen under the write lock, so no other write lands in between.
+    pub fn write_with(
+        &self,
+        ack: Ack,
+        build: impl FnOnce(&View<'_>) -> Result<Operation>,
+    ) -> Result<u64, WriteError> {
+        self.commit(ack, |view| self.check(build(view)?))
+    }
+
+    /// Validates payloads and prepares vectors, which must happen before an operation is
+    /// logged.
+    fn check(&self, mut op: Operation) -> Result<Operation, WriteError> {
         match &op {
             Operation::Upsert(points) => {
                 for p in points {
@@ -477,9 +530,20 @@ impl Shard {
                     .map_err(WriteError::Invalid)?;
             }
         }
-        let bytes = op.encode();
+        Ok(op)
+    }
+
+    fn commit(
+        &self,
+        ack: Ack,
+        build: impl FnOnce(&View<'_>) -> Result<Operation, WriteError>,
+    ) -> Result<u64, WriteError> {
         let seq = {
             let mut state = write(&self.state);
+            let op = build(&View {
+                state: StateRef::Borrowed(&state),
+            })?;
+            let bytes = op.encode();
             let changes = state.plan(&op)?;
             let seq = self.wal.append(&bytes)?;
             state.install(seq, changes, bytes.len());
@@ -520,9 +584,13 @@ impl Shard {
 
     /// A consistent view of every point, held until it is dropped, which blocks writes, so
     /// keep it short.
+    ///
+    /// Read only through the view while holding it: any other `Shard` method takes the lock
+    /// again, and once a writer is queued for it that second request waits behind the writer,
+    /// which waits for the view, so the thread deadlocks.
     pub fn view(&self) -> View<'_> {
         View {
-            state: read(&self.state),
+            state: StateRef::Guard(read(&self.state)),
         }
     }
 
@@ -571,6 +639,7 @@ impl Shard {
             entries,
         )?;
         let segment = Arc::new(Segment::open(&dest, seg_id, self.config.dim)?);
+        let mut slot = Slot::new(segment, &manifest.payload_indexes)?;
         crash_point("shard.flush.segment_published", || {});
 
         let mut next = manifest.clone();
@@ -590,13 +659,7 @@ impl Shard {
 
         {
             let mut state = write(&self.state);
-            let rows = segment.rows();
-            let mut slot = Slot {
-                segment: segment.clone(),
-                live: vec![0; rows.div_ceil(64)],
-                live_rows: 0,
-            };
-            for e in segment.entries() {
+            for e in slot.segment.clone().entries() {
                 // Still the newest copy unless the memtable took a newer write meanwhile.
                 if let Some(row) = e.row
                     && state.index.get(&e.id) == Some(&Loc::Recent)
@@ -618,6 +681,78 @@ impl Shard {
     pub fn sync(&self) -> Result<()> {
         self.wal.sync_all()
     }
+
+    /// The payload indexes every segment builds.
+    pub fn payload_indexes(&self) -> Vec<PayloadIndexSpec> {
+        read(&self.state).payload_indexes.clone()
+    }
+
+    /// Adds a payload index, building it for every segment, and returns whether it was new.
+    pub fn create_payload_index(&self, spec: PayloadIndexSpec) -> Result<bool> {
+        self.change_payload_indexes(|list| {
+            if list.contains(&spec) {
+                return false;
+            }
+            list.push(spec);
+            true
+        })
+    }
+
+    /// Removes a payload index and returns whether it existed.
+    pub fn drop_payload_index(&self, spec: &PayloadIndexSpec) -> Result<bool> {
+        self.change_payload_indexes(|list| {
+            let before = list.len();
+            list.retain(|s| s != spec);
+            list.len() != before
+        })
+    }
+
+    /// Applies `change` to the list of payload indexes and, when it reports a change, builds
+    /// the new indexes for every segment, records the list in a new manifest and swaps the
+    /// indexes in. The flush lock is held throughout, so no segment appears meanwhile.
+    fn change_payload_indexes(
+        &self,
+        change: impl FnOnce(&mut Vec<PayloadIndexSpec>) -> bool,
+    ) -> Result<bool> {
+        let mut manifest = lock(&self.flush);
+        if self.flush_broken.load(Ordering::Acquire) {
+            return Err(Error::Invalid(format!(
+                "{}: an earlier manifest write failed, restart to change payload indexes",
+                self.dir.display()
+            )));
+        }
+        let mut next = manifest.clone();
+        if !change(&mut next.payload_indexes) {
+            return Ok(false);
+        }
+        next.generation += 1;
+
+        // Built before anything is written, so a failure changes nothing.
+        let segments: Vec<(Arc<Segment>, Vec<Entry>)> = read(&self.state)
+            .slots
+            .iter()
+            .map(|s| (s.segment.clone(), s.rows.clone()))
+            .collect();
+        let mut built = HashMap::new();
+        for (segment, rows) in &segments {
+            let index = build_payload_index(segment, rows, &next.payload_indexes)?;
+            built.insert(segment.id(), Arc::new(index));
+        }
+
+        if let Err(e) = next.write(&self.dir) {
+            self.flush_broken.store(true, Ordering::Release);
+            return Err(e);
+        }
+        let mut state = write(&self.state);
+        state.payload_indexes = next.payload_indexes.clone();
+        *manifest = next;
+        for slot in &mut state.slots {
+            slot.payload_index = built
+                .remove(&slot.segment.id())
+                .expect("no segment appears while the flush lock is held");
+        }
+        Ok(true)
+    }
 }
 
 /// Why a write was refused.
@@ -631,7 +766,24 @@ pub enum WriteError {
 
 /// A consistent read-only view of a shard's points.
 pub struct View<'a> {
-    state: RwLockReadGuard<'a, State>,
+    state: StateRef<'a>,
+}
+
+/// The state behind a [`View`]: its own read lock, or the write lock a write already holds.
+enum StateRef<'a> {
+    Guard(RwLockReadGuard<'a, State>),
+    Borrowed(&'a State),
+}
+
+impl std::ops::Deref for StateRef<'_> {
+    type Target = State;
+
+    fn deref(&self) -> &State {
+        match self {
+            StateRef::Guard(g) => g,
+            StateRef::Borrowed(s) => s,
+        }
+    }
 }
 
 /// A point seen through a [`View`].
@@ -676,9 +828,77 @@ fn recent_points<'a>(
     })
 }
 
+/// One segment seen through a [`View`], with the rows that still hold their point's newest
+/// copy.
+pub struct SegmentView<'a> {
+    slot: &'a Slot,
+}
+
+impl<'a> SegmentView<'a> {
+    pub fn id(&self) -> u64 {
+        self.slot.segment.id()
+    }
+
+    /// The number of rows, live or not.
+    pub fn rows(&self) -> u32 {
+        self.slot.rows.len() as u32
+    }
+
+    /// Rows holding their point's newest copy, every other row is hidden by a newer write.
+    pub fn live(&self) -> &'a RoaringBitmap {
+        &self.slot.live
+    }
+
+    /// Every row's vector back to back, `dim` floats each.
+    pub fn vectors(&self) -> &'a [f32] {
+        self.slot.segment.vectors()
+    }
+
+    /// The point at `row`, live or not. Panics if `row` is out of range.
+    pub fn point(&self, row: u32) -> PointRef<'a> {
+        let e = self.slot.rows[row as usize];
+        PointRef {
+            id: e.id,
+            version: e.version,
+            vector: self.slot.segment.vector(row),
+            payload: PayloadRef::Segment(&self.slot.segment, row),
+        }
+    }
+
+    pub fn payload_index(&self) -> &'a PayloadIndex {
+        &self.slot.payload_index
+    }
+}
+
 impl View<'_> {
     pub fn len(&self) -> usize {
         self.state.index.len()
+    }
+
+    pub fn get(&self, id: PointId) -> Result<Option<Record>> {
+        self.state.get(id)
+    }
+
+    /// The payload indexes every segment builds.
+    pub fn payload_indexes(&self) -> &[PayloadIndexSpec] {
+        &self.state.payload_indexes
+    }
+
+    /// Points not yet in a segment, each exactly once, in no particular order.
+    pub fn recent(&self) -> impl Iterator<Item = PointRef<'_>> {
+        let state = &*self.state;
+        let frozen = state
+            .frozen
+            .as_deref()
+            .into_iter()
+            .flat_map(move |f| recent_points(f, Some(&state.mem)));
+        recent_points(&state.mem, None).chain(frozen)
+    }
+
+    /// The segments, oldest first. Together with [`View::recent`] their live rows hold every
+    /// point exactly once.
+    pub fn segments(&self) -> impl Iterator<Item = SegmentView<'_>> {
+        self.state.slots.iter().map(|slot| SegmentView { slot })
     }
 
     pub fn is_empty(&self) -> bool {
@@ -687,25 +907,10 @@ impl View<'_> {
 
     /// Every point, each exactly once, in no particular order.
     pub fn points(&self) -> impl Iterator<Item = PointRef<'_>> {
-        let state = &*self.state;
-        let mem = recent_points(&state.mem, None);
-        let frozen = state
-            .frozen
-            .as_deref()
-            .into_iter()
-            .flat_map(move |f| recent_points(f, Some(&state.mem)));
-        let segments = state.slots.iter().flat_map(|slot| {
-            slot.segment.entries().iter().filter_map(move |e| {
-                let row = e.row?;
-                slot.is_live(row).then(|| PointRef {
-                    id: e.id,
-                    version: e.version,
-                    vector: slot.segment.vector(row),
-                    payload: PayloadRef::Segment(&slot.segment, row),
-                })
-            })
-        });
-        mem.chain(frozen).chain(segments)
+        let segments = self
+            .segments()
+            .flat_map(|seg| seg.live().iter().map(move |row| seg.point(row)));
+        self.recent().chain(segments)
     }
 }
 

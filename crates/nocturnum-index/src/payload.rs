@@ -16,6 +16,7 @@
 //! two sets need the reference evaluator, [`nocturnum_core::Filter::matches`], which defines
 //! what every filter means and which the indexed answer must always agree with.
 
+use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap};
 
 use nocturnum_core::filter::{FieldCondition, MinShould, field_values};
@@ -120,14 +121,16 @@ fn float_key(f: f64) -> u64 {
 
 impl PayloadIndex {
     /// Builds the indexes listed in `schema` over a segment of `rows` rows, from each row's
-    /// point id and payload. A field may appear with several kinds.
+    /// point id and, only when `schema` names a field, its payload, read through `payload`.
+    /// A field may appear with several kinds.
     ///
     /// Panics if a row is not below `rows`.
-    pub fn build<'a>(
+    pub fn build<P: Borrow<Payload>, E>(
         rows: u32,
         schema: &[(JsonPath, PayloadIndexKind)],
-        points: impl IntoIterator<Item = (u32, PointId, &'a Payload)>,
-    ) -> PayloadIndex {
+        points: impl IntoIterator<Item = (u32, PointId)>,
+        mut payload: impl FnMut(u32) -> Result<P, E>,
+    ) -> Result<PayloadIndex, E> {
         let mut fields: HashMap<JsonPath, FieldIndex> = HashMap::new();
         for (path, kind) in schema {
             let f = fields.entry(path.clone()).or_default();
@@ -149,11 +152,14 @@ impl PayloadIndex {
         }
 
         let mut ids = HashMap::new();
-        for (row, id, payload) in points {
+        for (row, id) in points {
             assert!(row < rows, "row {row} is outside a segment of {rows} rows");
             ids.insert(id, row);
-            for (path, f) in &mut fields {
-                f.add(row, &field_values(path, &payload.0));
+            if !fields.is_empty() {
+                let p = payload(row)?;
+                for (path, f) in &mut fields {
+                    f.add(row, &field_values(path, &p.borrow().0));
+                }
             }
         }
         for f in fields.values_mut() {
@@ -164,11 +170,11 @@ impl PayloadIndex {
 
         let mut universe = RoaringBitmap::new();
         universe.insert_range(0..rows);
-        PayloadIndex {
+        Ok(PayloadIndex {
             universe,
             ids,
             fields,
-        }
+        })
     }
 
     /// Every row, matching or not.

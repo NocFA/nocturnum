@@ -17,11 +17,10 @@ fn segment(n: u32, tag_every: u32, free_every: u32) -> (PayloadIndex, Vec<Payloa
     let index = PayloadIndex::build(
         n,
         &[("tag".parse().unwrap(), PayloadIndexKind::Keyword)],
-        payloads
-            .iter()
-            .enumerate()
-            .map(|(r, p)| (r as u32, PointId::Num(r as u64), p)),
-    );
+        (0..n).map(|r| (r, PointId::Num(r as u64))),
+        |r| Ok::<_, ()>(&payloads[r as usize]),
+    )
+    .unwrap();
     (index, payloads)
 }
 

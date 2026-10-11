@@ -174,8 +174,11 @@ fn full_schema() -> Vec<(JsonPath, PayloadIndexKind)> {
 }
 
 fn build(d: &Data, schema: &[(JsonPath, PayloadIndexKind)]) -> PayloadIndex {
-    let points = (0..d.payloads.len()).map(|r| (r as u32, d.ids[r], &d.payloads[r]));
-    PayloadIndex::build(d.payloads.len() as u32, schema, points)
+    let points = (0..d.payloads.len()).map(|r| (r as u32, d.ids[r]));
+    PayloadIndex::build(d.payloads.len() as u32, schema, points, |r| {
+        Ok::<_, ()>(&d.payloads[r as usize])
+    })
+    .unwrap()
 }
 
 fn reference(d: &Data, filter: &Filter) -> RoaringBitmap {

@@ -5,11 +5,13 @@ Decided while building the payload indexes on 2026-10-11, an implementation choi
 ## What
 
 - Payload indexes are opt-in per field and per kind (`keyword`, `integer`, `float`, `bool`), and every indexed field also records how many non-null values each row holds and which rows hold a `null`.
-- Each immutable segment gets its own indexes, built in memory from the segment's payloads when the segment is written or opened, and never logged, synced or listed in the manifest.
+- Each immutable segment gets its own indexes, built in memory from the segment's payloads when the segment is written or opened, and the indexes themselves are never logged or synced, only the list of which ones to build.
 - The memtable has no indexes, filters on it run the reference evaluator, `Filter::matches`, since it holds at most one flush's worth of points.
 - A filter on a segment becomes two row sets, the rows it surely matches and the rows it may match, and only rows between the two get their payload read and checked by the reference evaluator.
 
-The code is `crates/nocturnum-index/src/payload.rs` for the indexes and `crates/nocturnum-query/src/plan.rs` for the planner.
+The list of indexes lives in the shard's manifest as `payload_indexes`, left out when empty so older manifests read unchanged, and creating or dropping an index builds the new indexes for every segment before writing the manifest that records it.
+
+The code is `crates/nocturnum-index/src/payload.rs` for the indexes, `crates/nocturnum-query/src/plan.rs` for the planner and `crates/nocturnum-query/src/collection.rs` for the reads that use both.
 
 ## Why
 
