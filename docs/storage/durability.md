@@ -68,6 +68,23 @@ A crash while the shard is first created leaves no shard, since nothing was ackn
 
 A mutation check was done by hand: truncating the WAL before writing the manifest, the classic ordering bug, fails both shard crash tests with a corruption error naming the missing records.
 
+### Merges and vacuums
+
+The same harness runs a second child that merges and vacuums halfway between flushes, with a limit of two segments so nearly every cycle rewrites something while the memtable holds changes to the points being merged.
+It runs 20 random kills, which checks about 400 acknowledged operations, and kills the child at every step of a merge:
+
+| Crash point | Leaves behind |
+|---|---|
+| `shard.merge.segment_built` | the merged segment in place, unlisted, with its inputs still live |
+| `shard.merge.manifest_written` | a manifest listing the merged segment, its inputs not yet deleted |
+| `shard.merge.first_input_removed` | one input deleted and the rest still on disk, all unlisted |
+
+A merge only drops a dead row when its point's newest state is already in a segment, or the point is deleted, because the WAL holds operations rather than records: a payload change still in the memtable is replayed against the older copy after a crash.
+The shard's model test found this, and the crash tests catch it too, since letting a merge drop every dead row fails two of them.
+
+A dropped row can also be justified by a deletion acknowledged as `applied` and not yet synced, so a merge syncs the WAL up to the point it looked before publishing.
+SIGKILL leaves unsynced WAL data in the page cache, so the crash tests cannot catch a merge that skips that sync, and this rule rests on review until the power-loss tests in the LazyFS task cover it.
+
 ## Unit tests
 
 `crates/nocturnum-storage/src/wal/tests.rs` covers what a crash test reaches only by chance in the WAL:

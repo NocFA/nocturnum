@@ -26,6 +26,7 @@
 
 use std::collections::{BinaryHeap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 
 use nocturnum_core::payload::PathStep;
 use nocturnum_core::{Ack, Filter, JsonPath, Payload, PayloadIndexSpec, PointId, VectorConfig};
@@ -34,8 +35,8 @@ use nocturnum_index::flat::search_filtered;
 use crate::plan::{PlanOptions, Strategy, choose};
 use nocturnum_index::{Bounds, TopK};
 use nocturnum_storage::{
-    Operation, PointRef, PointWrite, SegmentView, Shard, ShardOptions, ShardRecovery, View,
-    WriteError,
+    Operation, Optimizer, OptimizerOptions, OptimizerStatus, PointRef, PointWrite, SegmentView,
+    Shard, ShardOptions, ShardRecovery, View, WriteError,
 };
 use serde_json::{Map, Value};
 
@@ -163,8 +164,9 @@ pub struct ScrollPage {
 }
 
 pub struct Collection {
-    shard: Shard,
+    shard: Arc<Shard>,
     plan: PlanOptions,
+    optimizer: Option<Optimizer>,
 }
 
 impl Collection {
@@ -176,7 +178,24 @@ impl Collection {
     ) -> Result<(Collection, ShardRecovery)> {
         let (shard, recovery) = Shard::open(dir, options, create)?;
         let plan = PlanOptions::for_dim(shard.config().dim);
-        Ok((Collection { shard, plan }, recovery))
+        let collection = Collection {
+            shard: Arc::new(shard),
+            plan,
+            optimizer: None,
+        };
+        Ok((collection, recovery))
+    }
+
+    /// Starts a background thread that flushes, merges and vacuums segments, see
+    /// [`Shard::optimize_once`]. Dropping the collection stops it.
+    pub fn start_optimizer(&mut self, options: OptimizerOptions) {
+        self.optimizer = None;
+        self.optimizer = Some(Optimizer::start(self.shard.clone(), options));
+    }
+
+    /// What the optimizer is doing and last did.
+    pub fn optimizer_status(&self) -> OptimizerStatus {
+        self.shard.optimizer_status()
     }
 
     /// Replaces the planner's thresholds, which default to [`PlanOptions::for_dim`].

@@ -23,7 +23,7 @@ Keeping the mutable layer in RAM and letting the WAL be its only durable form re
 
 - **Memory:** the memtable holds unflushed points in RAM, bounded by `ShardOptions::flush_bytes` (32 MiB by default), which suits the homelab target.
 - **Startup time:** recovery replays at most one memtable's worth of WAL.
-- **Segment count:** every flush adds a segment, so merging small segments is the optimizer's job (its own Segments task), and until then search cost grows with the number of flushes.
+- **Segment count:** every flush adds a segment, so the optimizer (`crates/nocturnum-storage/src/shard/merge.rs`) merges adjacent segments past a limit of 8 and rewrites any with more than 20% of their rows droppable, building aside and swapping through the manifest like a flush.
 - **Writes block during long reads:** a read view holds the shard's read lock, so a long scan delays writers. That is acceptable for v1, and the optimizer task can move readers onto snapshots of the segment list.
 
 ## Invariants the code relies on
@@ -31,3 +31,4 @@ Keeping the mutable layer in RAM and letting the WAL be its only durable form re
 1. Every point id appears at most once per segment, and a newer segment only holds newer versions of a point than an older one, because segments are flushed in sequence order. Merges must keep this.
 2. The manifest never names a segment that is not fully on disk, because segments are renamed into place and synced before the manifest is written.
 3. The WAL is never truncated past the manifest's watermark, and recovery refuses to start, with a corruption error, if the WAL ends before the watermark or starts after the record replay needs.
+4. A rewrite keeps every row the WAL may still replay an operation against: a dead row is dropped only when its point's newest state is in a segment or the point is deleted, the WAL is synced up to that moment before the rewrite is published, so an unsynced deletion cannot be lost while the row it hid is gone, and deletion entries are dropped only when the merge starts at the oldest segment.

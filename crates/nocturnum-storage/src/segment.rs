@@ -63,7 +63,15 @@ pub struct EntryIn<'a> {
     pub id: PointId,
     pub version: u64,
     /// The vector and payload, `None` for a deletion.
-    pub value: Option<(&'a [f32], &'a Payload)>,
+    pub value: Option<(&'a [f32], PayloadIn<'a>)>,
+}
+
+/// A payload handed to [`write_segment`].
+#[derive(Debug, Clone, Copy)]
+pub enum PayloadIn<'a> {
+    Value(&'a Payload),
+    /// Already encoded, as another segment stores it, so a merge copies it without parsing.
+    Json(&'a [u8]),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -158,8 +166,15 @@ pub(crate) fn write_segment<'a>(
                 if let Some(all) = &mut all_vectors {
                     all.extend_from_slice(vector);
                 }
-                let json = serde_json::to_vec(payload).expect("a payload always serialises");
-                w_payloads.put(&json)?;
+                let encoded;
+                let json: &[u8] = match payload {
+                    PayloadIn::Value(p) => {
+                        encoded = serde_json::to_vec(p).expect("a payload always serialises");
+                        &encoded
+                    }
+                    PayloadIn::Json(bytes) => bytes,
+                };
+                w_payloads.put(json)?;
                 payload_at += json.len() as u64;
                 w_offsets.put(&payload_at.to_le_bytes())?;
                 rows = rows
@@ -291,6 +306,7 @@ pub struct Segment {
     payloads: Option<Mmap>,
     payload_offsets: Vec<u64>,
     graph: Option<Hnsw>,
+    disk_bytes: u64,
 }
 
 impl std::fmt::Debug for Segment {
@@ -477,6 +493,7 @@ impl Segment {
 
         Ok(Segment {
             graph,
+            disk_bytes: meta.files.values().map(|f| f.len).sum(),
             id: expected_id,
             dir: dir.to_owned(),
             dim,
@@ -521,6 +538,20 @@ impl Segment {
         &self.vectors()[start..start + self.dim]
     }
 
+    /// The payload of `row` as stored, JSON.
+    pub fn payload_bytes(&self, row: u32) -> &[u8] {
+        let r = row as usize;
+        let (start, end) = (self.payload_offsets[r], self.payload_offsets[r + 1]);
+        self.payloads
+            .as_deref()
+            .map_or(&[][..], |m| &m[start as usize..end as usize])
+    }
+
+    /// The bytes the segment's files take, as `meta.json` records them.
+    pub fn disk_bytes(&self) -> u64 {
+        self.disk_bytes
+    }
+
     pub fn payload(&self, row: u32) -> Result<Payload> {
         let r = row as usize;
         let (start, end) = (self.payload_offsets[r], self.payload_offsets[r + 1]);
@@ -562,7 +593,7 @@ mod tests {
             EntryIn {
                 id: PointId::Num(1),
                 version: 10,
-                value: Some((&v1, &p1)),
+                value: Some((&v1, PayloadIn::Value(&p1))),
             },
             EntryIn {
                 id: PointId::Num(2),
@@ -572,7 +603,7 @@ mod tests {
             EntryIn {
                 id: PointId::Uuid(Uuid::nil()),
                 version: 11,
-                value: Some((&v3, &p3)),
+                value: Some((&v3, PayloadIn::Value(&p3))),
             },
         ];
         let dest = root.join(segment_dir_name(id));
@@ -679,7 +710,7 @@ mod tests {
         let entries = vectors.iter().enumerate().map(|(i, v)| EntryIn {
             id: PointId::Num(i as u64),
             version: 1,
-            value: Some((v.as_slice(), &p)),
+            value: Some((v.as_slice(), PayloadIn::Value(&p))),
         });
         let options = GraphOptions {
             min_bytes: 0,
@@ -710,7 +741,7 @@ mod tests {
         let few = vectors.iter().take(3).enumerate().map(|(i, v)| EntryIn {
             id: PointId::Num(i as u64),
             version: 1,
-            value: Some((v.as_slice(), &p)),
+            value: Some((v.as_slice(), PayloadIn::Value(&p))),
         });
         write_segment(
             &root.path().join("tmp"),

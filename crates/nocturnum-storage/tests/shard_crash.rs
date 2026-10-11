@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use nocturnum_core::{Ack, Distance, Payload, PointId, VectorConfig};
 use nocturnum_storage::{
-    GraphOptions, Operation, PointWrite, Record, Shard, ShardOptions, WalOptions,
+    GraphOptions, Operation, OptimizerOptions, PointWrite, Record, Shard, ShardOptions, WalOptions,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -159,8 +159,16 @@ fn shard_crash_child() {
         eprintln!("shard crash child failed: {info}");
         std::process::exit(101);
     }));
-    let (dir, run) = spec.rsplit_once(',').unwrap();
-    let run: u64 = run.parse().unwrap();
+    let mut parts = spec.rsplitn(3, ',');
+    let optimize = parts.next().unwrap() == "optimize";
+    let run: u64 = parts.next().unwrap().parse().unwrap();
+    let dir = parts.next().unwrap();
+    // A limit of two segments makes nearly every flush trigger a merge, and vacuums follow
+    // from the overwrites.
+    let options = OptimizerOptions {
+        max_segments: 2,
+        ..OptimizerOptions::default()
+    };
     let (shard, _) = Shard::open(dir, opts(), Some(config())).expect("open");
     println!("ready");
     // Writes until the process is killed or reaches its crash point.
@@ -173,6 +181,11 @@ fn shard_crash_child() {
         if counter % FLUSH_EVERY == FLUSH_EVERY - 1 {
             shard.flush().expect("flush");
         }
+        // Halfway between flushes, so merges run while the memtable holds changes that hide
+        // rows in the segments being merged.
+        if optimize && counter % FLUSH_EVERY == FLUSH_EVERY / 2 {
+            while shard.optimize_once(&options).expect("optimize").is_some() {}
+        }
         counter += 1;
     }
 }
@@ -183,6 +196,7 @@ fn run_child(
     run: u64,
     kill_after: Option<Duration>,
     crash_at: Option<&str>,
+    optimize: bool,
 ) -> Option<u64> {
     let mut cmd = Command::new(std::env::current_exe().unwrap());
     cmd.args([
@@ -192,7 +206,14 @@ fn run_child(
         "--test-threads",
         "1",
     ])
-    .env(CHILD_ENV, format!("{},{run}", dir.display()))
+    .env(
+        CHILD_ENV,
+        format!(
+            "{},{run},{}",
+            dir.display(),
+            if optimize { "optimize" } else { "plain" }
+        ),
+    )
     .env_remove("NOCTURNUM_CRASH_AT")
     .stdout(Stdio::piped())
     .stderr(Stdio::inherit());
@@ -310,7 +331,7 @@ fn acknowledged_writes_survive_sigkill_across_flushes() {
     let mut total = 0;
     for run in 0..20 {
         let after = Duration::from_micros(10_000 + rng.below(250_000));
-        let acked = run_child(dir.path(), run, Some(after), None);
+        let acked = run_child(dir.path(), run, Some(after), None, false);
         total += acked.map_or(0, |k| k + 1);
         verify(dir.path(), &mut model, run, acked, &format!("run {run}"));
     }
@@ -338,9 +359,9 @@ fn every_flush_crash_point_recovers() {
         let mut model = BTreeMap::new();
         // Run 0 crashes at the point, run 1 carries on from there and is killed, both must
         // recover to an acknowledged state.
-        let acked = run_child(dir.path(), 0, None, Some(point));
+        let acked = run_child(dir.path(), 0, None, Some(point), false);
         verify(dir.path(), &mut model, 0, acked, point);
-        let acked = run_child(dir.path(), 1, Some(Duration::from_millis(60)), None);
+        let acked = run_child(dir.path(), 1, Some(Duration::from_millis(60)), None, false);
         verify(
             dir.path(),
             &mut model,
@@ -358,7 +379,7 @@ fn a_crash_during_creation_leaves_no_shard() {
     let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let dir = TempDir::new().unwrap();
     assert_eq!(
-        run_child(dir.path(), 0, None, Some("manifest.tmp_written:1")),
+        run_child(dir.path(), 0, None, Some("manifest.tmp_written:1"), false),
         None
     );
     assert!(matches!(
@@ -367,4 +388,59 @@ fn a_crash_during_creation_leaves_no_shard() {
     ));
     let (shard, _) = Shard::open(dir.path(), opts(), Some(config())).unwrap();
     assert!(shard.is_empty());
+}
+
+#[test]
+fn acknowledged_writes_survive_sigkill_while_merging() {
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as u64;
+    eprintln!("merge crash seed {seed}");
+    let mut rng = Rng::new(seed);
+    let dir = TempDir::new().unwrap();
+    let mut model = BTreeMap::new();
+    let mut total = 0;
+    for run in 0..20 {
+        let after = Duration::from_micros(10_000 + rng.below(250_000));
+        let acked = run_child(dir.path(), run, Some(after), None, true);
+        total += acked.map_or(0, |k| k + 1);
+        verify(
+            dir.path(),
+            &mut model,
+            run,
+            acked,
+            &format!("merging run {run}"),
+        );
+    }
+    eprintln!("20 crashes while merging, {total} acknowledged operations checked");
+    assert!(total >= 100, "only {total} operations were acknowledged");
+}
+
+#[test]
+fn every_merge_crash_point_recovers() {
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let points = [
+        "shard.merge.segment_built:1",
+        "shard.merge.segment_built:4",
+        "shard.merge.manifest_written:1",
+        "shard.merge.manifest_written:4",
+        "shard.merge.first_input_removed:1",
+        "shard.merge.first_input_removed:3",
+    ];
+    for point in points {
+        let dir = TempDir::new().unwrap();
+        let mut model = BTreeMap::new();
+        let acked = run_child(dir.path(), 0, None, Some(point), true);
+        verify(dir.path(), &mut model, 0, acked, point);
+        let acked = run_child(dir.path(), 1, Some(Duration::from_millis(60)), None, true);
+        verify(
+            dir.path(),
+            &mut model,
+            1,
+            acked,
+            &format!("{point}, next run"),
+        );
+    }
 }

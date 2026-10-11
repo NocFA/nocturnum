@@ -451,3 +451,37 @@ fn search_walks_segment_graphs_when_the_planner_says_so() {
         assert!(high >= 0.95, "recall at ef 128 was {high:.3}, filter {f:?}");
     }
 }
+
+#[test]
+fn the_background_optimizer_merges_while_writes_carry_on() {
+    let dir = TempDir::new().unwrap();
+    let mut c = create(dir.path(), Distance::Dot);
+    c.start_optimizer(nocturnum_storage::OptimizerOptions {
+        max_segments: 2,
+        interval: Duration::from_millis(5),
+        ..Default::default()
+    });
+    for round in 0..40u64 {
+        c.upsert(
+            vec![point(round % 25, [round as f32, 1.0], json!({"r": round}))],
+            Ack::Applied,
+        )
+        .unwrap();
+        if round % 4 == 3 {
+            c.flush().unwrap();
+        }
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while c.segment_count() > 2 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the optimizer never caught up"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(c.count(None).unwrap(), 25);
+    assert!(c.optimizer_status().last.is_some());
+    drop(c);
+    let c = Collection::open(dir.path(), options(), None).unwrap().0;
+    assert_eq!(c.count(None).unwrap(), 25);
+}

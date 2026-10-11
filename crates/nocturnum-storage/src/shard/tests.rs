@@ -391,6 +391,9 @@ enum Step {
     Op(Operation),
     Flush,
     Reopen,
+    /// Merges a run of segments, picked by position and length from those live at the time.
+    Merge(usize, usize),
+    Optimize,
 }
 
 fn keyword(path: &str) -> PayloadIndexSpec {
@@ -523,6 +526,256 @@ fn write_with_builds_the_operation_from_a_view_under_the_write_lock() {
     assert_eq!(upsert(&shard, vec![point(3, 0.0, json!({}))]), 3);
 }
 
+/// The segment ids that have a directory on disk, in id order, which outside a flush or merge
+/// in progress are exactly the live ones.
+fn segment_dirs(dir: &Path) -> Vec<u64> {
+    let mut ids: Vec<u64> = fs::read_dir(dir.join("segments"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .map(|n| u64::from_str_radix(n.strip_prefix("seg-").expect("only segments"), 16).unwrap())
+        .collect();
+    ids.sort();
+    ids
+}
+
+fn segment_rows(shard: &Shard) -> Vec<(u32, u64)> {
+    shard
+        .view()
+        .segments()
+        .map(|s| (s.rows(), s.live().len()))
+        .collect()
+}
+
+#[test]
+fn merging_keeps_the_newest_copies_and_drops_dead_rows() {
+    let dir = TempDir::new().unwrap();
+    let shard = create(dir.path());
+    upsert(
+        &shard,
+        (0..10)
+            .map(|i| point(i, i as f32, json!({"v": 1})))
+            .collect(),
+    );
+    shard.flush().unwrap();
+    upsert(
+        &shard,
+        (0..5).map(|i| point(i, 50.0, json!({"v": 2}))).collect(),
+    );
+    shard.flush().unwrap();
+    shard
+        .write(Operation::Delete(vec![PointId::Num(9)]), Ack::Durable)
+        .unwrap();
+    shard.flush().unwrap();
+    let before = contents(&shard);
+    // 10 rows, 5 hidden by the second segment and 1 by the deletion in the third.
+    assert_eq!(segment_rows(&shard), [(10, 4), (5, 5), (0, 0)]);
+
+    let ids = shard.segment_ids();
+    let merged = shard.merge(&ids[..2]).unwrap();
+    assert_eq!(shard.segment_ids(), [merged, ids[2]]);
+    assert_eq!(segment_rows(&shard), [(9, 9), (0, 0)]);
+    assert_eq!(contents(&shard), before);
+    assert_eq!(segment_dirs(dir.path()), sorted(shard.segment_ids()));
+    drop(shard);
+    let shard = reopen(dir.path());
+    assert_eq!(contents(&shard), before);
+}
+
+fn sorted(mut ids: Vec<u64>) -> Vec<u64> {
+    ids.sort();
+    ids
+}
+
+/// Found by the model test: a row hidden only by a payload change still in the memtable must
+/// survive a rewrite, since replaying that change after a crash needs it.
+#[test]
+fn rows_hidden_by_the_memtable_survive_a_rewrite() {
+    let dir = TempDir::new().unwrap();
+    let shard = create(dir.path());
+    upsert(&shard, vec![point(4, 0.0, json!({"a": 1}))]);
+    shard.flush().unwrap();
+    shard
+        .write(
+            Operation::SetPayload {
+                ids: vec![PointId::Num(4)],
+                payload: payload(json!({"b": 2})),
+            },
+            Ack::Durable,
+        )
+        .unwrap();
+    let before = contents(&shard);
+    // Dead, but not droppable, so the policy leaves it alone and a forced rewrite keeps it.
+    let options = OptimizerOptions {
+        vacuum_ratio: 0.0,
+        ..OptimizerOptions::default()
+    };
+    assert_eq!(shard.optimize_once(&options).unwrap(), None);
+    shard.merge(&shard.segment_ids()).unwrap();
+    assert_eq!(segment_rows(&shard), [(1, 0)]);
+    drop(shard);
+    assert_eq!(contents(&reopen(dir.path())), before);
+}
+
+#[test]
+fn deletions_survive_merges_unless_the_run_starts_at_the_oldest_segment() {
+    let dir = TempDir::new().unwrap();
+    let shard = create(dir.path());
+    upsert(&shard, vec![point(1, 1.0, json!({}))]);
+    shard.flush().unwrap();
+    shard
+        .write(Operation::Delete(vec![PointId::Num(1)]), Ack::Durable)
+        .unwrap();
+    shard.flush().unwrap();
+    upsert(&shard, vec![point(2, 2.0, json!({}))]);
+    shard.flush().unwrap();
+    let ids = shard.segment_ids();
+
+    // Merging the deletion with a newer segment must keep it, or point 1 comes back from the
+    // oldest segment.
+    let merged = shard.merge(&ids[1..]).unwrap();
+    drop(shard);
+    let shard = reopen(dir.path());
+    assert_eq!(shard.get(PointId::Num(1)).unwrap(), None);
+    let entries = shard.view().segments().nth(1).unwrap().point(0).id;
+    assert_eq!(entries, PointId::Num(2));
+
+    // Merging everything from the oldest drops the deletion and the copy it hid.
+    let all = shard.merge(&[ids[0], merged]).unwrap();
+    assert_eq!(shard.segment_ids(), [all]);
+    assert_eq!(segment_rows(&shard), [(1, 1)]);
+    assert_eq!(shard.get(PointId::Num(1)).unwrap(), None);
+}
+
+#[test]
+fn vacuum_and_merge_policy() {
+    let dir = TempDir::new().unwrap();
+    let shard = create(dir.path());
+    let options = OptimizerOptions {
+        max_segments: 2,
+        ..OptimizerOptions::default()
+    };
+    upsert(&shard, (0..10).map(|i| point(i, 0.0, json!({}))).collect());
+    shard.flush().unwrap();
+    assert_eq!(shard.optimize_once(&options).unwrap(), None);
+    // Rewriting 3 of 10 points kills 30% of the first segment's rows.
+    upsert(&shard, (0..3).map(|i| point(i, 1.0, json!({}))).collect());
+    shard.flush().unwrap();
+    let first = shard.segment_ids()[0];
+    let job = shard.optimize_once(&options).unwrap();
+    assert!(
+        matches!(job, Some(Job::Vacuum { input, .. }) if input == first),
+        "{job:?}"
+    );
+    assert_eq!(segment_rows(&shard), [(7, 7), (3, 3)]);
+
+    upsert(&shard, vec![point(20, 0.0, json!({}))]);
+    shard.flush().unwrap();
+    // Three segments and a limit of two: the smallest adjacent pair merges.
+    let ids = shard.segment_ids();
+    let job = shard.optimize_once(&options).unwrap();
+    assert!(
+        matches!(&job, Some(Job::Merge { inputs, .. }) if inputs == &ids[1..]),
+        "{job:?}"
+    );
+    assert_eq!(shard.optimizer_status().last, job);
+    assert_eq!(shard.len(), 11);
+}
+
+#[test]
+fn only_adjacent_live_segments_merge() {
+    let dir = TempDir::new().unwrap();
+    let shard = create(dir.path());
+    for i in 0..3 {
+        upsert(&shard, vec![point(i, 0.0, json!({}))]);
+        shard.flush().unwrap();
+    }
+    let ids = shard.segment_ids();
+    assert!(shard.merge(&[ids[0], ids[2]]).is_err());
+    assert!(shard.merge(&[ids[2], ids[1]]).is_err());
+    assert!(shard.merge(&[999]).is_err());
+    assert!(shard.merge(&[]).is_err());
+    assert_eq!(shard.segment_ids(), ids);
+}
+
+/// Writes and flushes from one thread while another merges, and the result matches what the
+/// writes alone produce.
+#[test]
+fn writes_and_flushes_carry_on_during_merges() {
+    let dir = TempDir::new().unwrap();
+    let shard = Arc::new(create(dir.path()));
+    let done = Arc::new(AtomicBool::new(false));
+    let merger = {
+        let (shard, done) = (shard.clone(), done.clone());
+        std::thread::spawn(move || {
+            let options = OptimizerOptions {
+                max_segments: 2,
+                ..OptimizerOptions::default()
+            };
+            while !done.load(Ordering::Acquire) {
+                shard.optimize_once(&options).unwrap();
+            }
+        })
+    };
+    let mut model = BTreeMap::new();
+    for round in 0..60u64 {
+        let op = if round % 5 == 4 {
+            Operation::Delete(vec![PointId::Num(round % 7)])
+        } else {
+            Operation::Upsert(vec![point(round % 13, round as f32, json!({"r": round}))])
+        };
+        apply_model(&mut model, &op);
+        shard.write(op, Ack::Applied).unwrap();
+        if round % 3 == 0 {
+            shard.flush().unwrap();
+        }
+    }
+    done.store(true, Ordering::Release);
+    merger.join().unwrap();
+    assert_eq!(contents(&shard), model);
+    drop(Arc::into_inner(shard).unwrap());
+    assert_eq!(contents(&reopen(dir.path())), model);
+}
+
+/// Found by the audit: a merge may drop a row because an `applied`, still unsynced deletion
+/// hides it, so it syncs the WAL before publishing, or power loss could lose the deletion
+/// after the row is gone.
+#[test]
+fn a_merge_syncs_the_writes_it_relies_on() {
+    let dir = TempDir::new().unwrap();
+    let opts = ShardOptions {
+        background_sync: Duration::from_secs(3600),
+        ..opts()
+    };
+    let shard = Shard::open(dir.path(), opts, Some(config())).unwrap().0;
+    upsert(&shard, vec![point(1, 0.0, json!({}))]);
+    shard.flush().unwrap();
+    let seq = shard
+        .write(Operation::Delete(vec![PointId::Num(1)]), Ack::Applied)
+        .unwrap();
+    assert!(
+        shard.wal.synced_seq() < seq,
+        "the deletion is not synced yet"
+    );
+    shard.merge(&shard.segment_ids()).unwrap();
+    assert!(
+        shard.wal.synced_seq() >= seq,
+        "the merge published before syncing"
+    );
+}
+
+#[test]
+fn a_vacuum_ratio_outside_0_to_1_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let shard = create(dir.path());
+    for ratio in [-0.1, 1.5, f64::NAN] {
+        let options = OptimizerOptions {
+            vacuum_ratio: ratio,
+            ..OptimizerOptions::default()
+        };
+        assert!(shard.optimize_once(&options).is_err(), "{ratio}");
+    }
+}
+
 fn apply_model(model: &mut BTreeMap<PointId, Record>, op: &Operation) {
     match op {
         Operation::Upsert(points) => {
@@ -601,8 +854,10 @@ fn step() -> impl Strategy<Value = Step> {
         1 => (ids(), small_payload()).prop_map(|(ids, payload)| Step::Op(Operation::OverwritePayload { ids, payload })),
         1 => ids().prop_map(|ids| Step::Op(Operation::DeletePayloadKeys { ids, keys: vec!["a".into()] })),
         1 => ids().prop_map(|i| Step::Op(Operation::ClearPayload(i))),
-        2 => Just(Step::Flush),
+        3 => Just(Step::Flush),
         1 => Just(Step::Reopen),
+        2 => (0usize..8, 1usize..4).prop_map(|(at, len)| Step::Merge(at, len)),
+        1 => Just(Step::Optimize),
     ]
 }
 
@@ -629,8 +884,21 @@ proptest! {
                     drop(shard);
                     shard = reopen(dir.path());
                 }
+                Step::Merge(at, len) => {
+                    let ids = shard.segment_ids();
+                    if !ids.is_empty() {
+                        let start = at % ids.len();
+                        let end = (start + len).min(ids.len());
+                        shard.merge(&ids[start..end]).unwrap();
+                    }
+                }
+                Step::Optimize => {
+                    let options = OptimizerOptions { max_segments: 2, ..OptimizerOptions::default() };
+                    shard.optimize_once(&options).unwrap();
+                }
             }
             prop_assert_eq!(&contents(&shard), &model);
+            prop_assert_eq!(segment_dirs(dir.path()), sorted(shard.segment_ids()), "directories on disk");
             for (id, rec) in &model {
                 prop_assert_eq!(shard.get(*id).unwrap(), Some(rec.clone()));
             }

@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc be539994329d9d0207f6232a9fdc8853441b939b3947f2962f6c8568b4ef6c5c # shrinks to steps = [Op(Upsert([PointWrite { id: Num(4), vector: [0.0, -0.0, 0.0], payload: Payload({}) }])), Flush, Op(SetPayload { ids: [Num(4)], payload: Payload({}) }), Merge(0, 1), Reopen]

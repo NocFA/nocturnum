@@ -4,7 +4,7 @@ nocturnum is a vector database written in Rust, for storing embeddings with JSON
 
 It follows the shape of [Qdrant](https://qdrant.tech/) (collections, points, payload filters, HNSW, a write-ahead log and segments), written from scratch, with everything a self-hoster needs in the open project and the web console built into the same binary.
 
-**Status:** early engine work, with the core types, the filter language and crash-tested storage (a write-ahead log, a memtable and immutable segments under a manifest), exact and HNSW vector search, payload indexes for filters and a collection layer for writes, search, scroll and count written, and nothing to run yet beyond `cargo run` printing the version, since the HTTP server comes next.
+**Status:** early engine work, with the core types, the filter language and crash-tested storage (a write-ahead log, a memtable and immutable segments under a manifest, merged and vacuumed in the background), exact and HNSW vector search, payload indexes for filters and a collection layer for writes, search, scroll and count written, and nothing to run yet beyond `cargo run` printing the version, since the HTTP server comes next.
 
 The filter semantics are defined in `crates/nocturnum-core/src/filter.rs`, the WAL's on-disk format in `crates/nocturnum-storage/src/wal.rs`, and what each write acknowledgement promises, with the crash tests behind it, in [`docs/storage/durability.md`](docs/storage/durability.md).
 

@@ -28,6 +28,12 @@
 //! lists the segment and records the WAL sequence number it covers, and only then truncates
 //! the WAL up to that number. Writes carry on into a fresh memtable while a flush runs.
 //!
+//! # Merges
+//!
+//! Every flush adds a small segment, so the optimizer merges adjacent segments and rewrites
+//! ones with many dead rows, building aside and swapping them in through the manifest, see
+//! the `merge` submodule.
+//!
 //! # Recovery
 //!
 //! Opening a shard reads the manifest, removes every segment directory it does not list
@@ -50,7 +56,9 @@ use crate::crash::crash_point;
 use crate::error::{Error, IoContext, Result};
 use crate::manifest::Manifest;
 use crate::op::{Operation, PointWrite};
-use crate::segment::{Entry, EntryIn, GraphOptions, Segment, segment_dir_name, write_segment};
+use crate::segment::{
+    Entry, EntryIn, GraphOptions, PayloadIn, Segment, segment_dir_name, write_segment,
+};
 use crate::sync::{create_dir_all_durable, sync_dir};
 use crate::wal::{PeriodicSync, Wal, WalOptions};
 
@@ -327,6 +335,9 @@ pub struct Shard {
     state: RwLock<State>,
     flush: Mutex<Manifest>,
     flush_broken: AtomicBool,
+    /// Held for a whole merge, so merges take turns.
+    merging: Mutex<()>,
+    optimizer_status: Mutex<OptimizerStatus>,
     _sync: PeriodicSync,
 }
 
@@ -479,6 +490,8 @@ impl Shard {
             state: RwLock::new(state),
             flush: Mutex::new(manifest),
             flush_broken: AtomicBool::new(false),
+            merging: Mutex::new(()),
+            optimizer_status: Mutex::new(OptimizerStatus::default()),
         };
         let recovery = ShardRecovery {
             wal: wal_recovery,
@@ -632,7 +645,10 @@ impl Shard {
         let entries = frozen.entries.iter().map(|(id, e)| EntryIn {
             id: *id,
             version: e.version,
-            value: e.value.as_ref().map(|r| (r.vector.as_slice(), &r.payload)),
+            value: e
+                .value
+                .as_ref()
+                .map(|r| (r.vector.as_slice(), PayloadIn::Value(&r.payload))),
         });
         write_segment(
             &seg_root.join(format!("tmp-{seg_id:016x}")),
@@ -922,6 +938,10 @@ impl View<'_> {
         self.recent().chain(segments)
     }
 }
+
+mod merge;
+
+pub use merge::{Job, OptimizerOptions, OptimizerStatus};
 
 #[cfg(test)]
 mod tests;
