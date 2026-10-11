@@ -36,7 +36,7 @@ use crate::plan::{PlanOptions, Strategy, choose};
 use nocturnum_index::{Bounds, TopK};
 use nocturnum_storage::{
     Operation, Optimizer, OptimizerOptions, OptimizerStatus, PointRef, PointWrite, SegmentView,
-    Shard, ShardOptions, ShardRecovery, View, WriteError,
+    Shard, ShardOptions, ShardRecovery, SnapshotInfo, View, WriteError,
 };
 use serde_json::{Map, Value};
 
@@ -191,6 +191,13 @@ impl Collection {
     pub fn start_optimizer(&mut self, options: OptimizerOptions) {
         self.optimizer = None;
         self.optimizer = Some(Optimizer::start(self.shard.clone(), options));
+    }
+
+    /// Writes a snapshot of the collection to `path`, with its checksum in `<path>.sha256`,
+    /// while writes carry on. [`nocturnum_storage::shard::restore`] unpacks one into a new
+    /// directory for [`Collection::open`].
+    pub fn snapshot(&self, path: &Path) -> Result<SnapshotInfo> {
+        Ok(self.shard.snapshot(path)?)
     }
 
     /// What the optimizer is doing and last did.

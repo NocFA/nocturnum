@@ -85,6 +85,29 @@ The shard's model test found this, and the crash tests catch it too, since letti
 A dropped row can also be justified by a deletion acknowledged as `applied` and not yet synced, so a merge syncs the WAL up to the point it looked before publishing.
 SIGKILL leaves unsynced WAL data in the page cache, so the crash tests cannot catch a merge that skips that sync, and this rule rests on review until the power-loss tests in the LazyFS task cover it.
 
+## Snapshots
+
+A snapshot (`crates/nocturnum-storage/src/shard/snapshot.rs`) is one tar file holding the manifest, every listed segment and the WAL files, with its SHA-256 in a sidecar file.
+It holds the flush lock while it copies, so nothing can truncate the WAL or delete a segment, and it syncs the WAL first, so it holds every write acknowledged before it started.
+Writes carry on meanwhile, so it may also hold later ones, cut at any point in the WAL, which recovery trims like after a crash, and either way it restores to a state the shard really passed through.
+
+| Test | Checks |
+|---|---|
+| `a_snapshot_during_writes_is_a_prefix_of_history` | a snapshot taken while another thread writes restores to exactly the result of some prefix of the writes, at least as long as what was acknowledged when it started |
+| `snapshots_survive_crashes_and_restore_to_a_real_state` | a child snapshotting every 20 writes is killed at random and halfway through writing a snapshot, and the newest finished snapshot always restores to a state the shard passed through |
+| `damaged_or_foreign_snapshots_are_refused` | a flipped byte fails the checksum, and a tar naming a file outside the shard is refused even with a matching sidecar |
+| `an_incomplete_snapshot_is_refused_before_it_takes_the_target` | a checksum-valid tar without a manifest is refused and leaves neither the target nor staging behind |
+| `snapshots_never_replace_an_existing_file` | four threads snapshotting to one name produce exactly one snapshot, which restores |
+| `prune_keeps_the_newest_good_snapshots` | a damaged newest snapshot is reported and kept out of the count, and a young staging file is left alone |
+
+The tar is written to a staging file unique to the call, synced and hard-linked to its name, which fails rather than replace an existing file, and the sidecar comes last, so a snapshot without a sidecar is unfinished and never restored.
+
+Restore reserves the target by creating it empty, checks the snapshot against its sidecar, then extracts the same open file into a staging directory, streaming each entry, refusing anything but the files a shard is made of, including tar extension records.
+The staged shard is opened, which runs full recovery and checks every segment, before it is renamed over the reservation, so the target only ever holds an empty directory or a shard that opens.
+`prune` keeps the newest snapshots that pass their checksum and leaves a damaged one in place without counting it, so a damaged newer snapshot never costs an older good one.
+
+The whole workspace suite, these tests included, also passed on an x86 Linux machine (ext4) on 2026-10-11, where the sparse-file test can actually fail, since the tar crate only looks for holes on Linux and FreeBSD, and does fail with sparse output switched back on.
+
 ## Unit tests
 
 `crates/nocturnum-storage/src/wal/tests.rs` covers what a crash test reaches only by chance in the WAL:

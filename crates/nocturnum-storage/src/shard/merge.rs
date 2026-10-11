@@ -236,7 +236,7 @@ impl Shard {
         Ok(())
     }
 
-    fn check_flushable(&self, _manifest: &Manifest) -> Result<()> {
+    pub(super) fn check_flushable(&self, _manifest: &Manifest) -> Result<()> {
         if self.flush_broken.load(Ordering::Acquire) {
             return Err(Error::Invalid(format!(
                 "{}: an earlier manifest write failed, restart to change segments again",

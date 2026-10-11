@@ -34,7 +34,7 @@ use uuid::Uuid;
 
 use crate::crash::crash_point;
 use crate::error::{Error, IoContext, Result};
-use crate::sync::{sync_dir, sync_file};
+use crate::sync::{read_bounded, sync_dir, sync_file};
 
 const FORMAT_VERSION: u32 = 1;
 const ENTRY_LEN: usize = 29;
@@ -350,7 +350,9 @@ impl Segment {
             reason,
         };
         let meta_path = dir.join("meta.json");
-        let meta_bytes = fs::read(&meta_path).ctx(|| format!("reading {}", meta_path.display()))?;
+        // A few hundred bytes in practice, bounded so a hostile one cannot exhaust memory.
+        let meta_bytes = read_bounded(&meta_path, 1024 * 1024)
+            .ctx(|| format!("reading {}", meta_path.display()))?;
         let meta: Meta = serde_json::from_slice(&meta_bytes)
             .map_err(|e| corrupt(format!("meta.json does not parse: {e}")))?;
         if meta.format != FORMAT_VERSION {

@@ -485,3 +485,28 @@ fn the_background_optimizer_merges_while_writes_carry_on() {
     let c = Collection::open(dir.path(), options(), None).unwrap().0;
     assert_eq!(c.count(None).unwrap(), 25);
 }
+
+#[test]
+fn a_collection_snapshot_restores_and_searches_the_same() {
+    let dir = TempDir::new().unwrap();
+    let c = create(dir.path(), Distance::Dot);
+    c.upsert(
+        (0..30)
+            .map(|i| point(i, [i as f32, 1.0], json!({"i": i})))
+            .collect(),
+        Ack::Durable,
+    )
+    .unwrap();
+    c.flush().unwrap();
+    c.upsert(vec![point(99, [5.0, 5.0], json!({}))], Ack::Durable)
+        .unwrap();
+    let snaps = TempDir::new().unwrap();
+    let path = snaps.path().join("c.snapshot");
+    c.snapshot(&path).unwrap();
+    let target = snaps.path().join("restored");
+    nocturnum_storage::shard::restore(&path, &target).unwrap();
+    let r = Collection::open(&target, options(), None).unwrap().0;
+    let req = SearchRequest::new(vec![1.0, 0.5], 5);
+    assert_eq!(r.search(&req).unwrap(), c.search(&req).unwrap());
+    assert_eq!(r.count(None).unwrap(), 31);
+}

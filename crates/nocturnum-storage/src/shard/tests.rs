@@ -776,6 +776,352 @@ fn a_vacuum_ratio_outside_0_to_1_is_refused() {
     }
 }
 
+fn snapshot_dir() -> TempDir {
+    TempDir::new().unwrap()
+}
+
+#[test]
+fn a_snapshot_restores_to_the_same_shard() {
+    let dir = TempDir::new().unwrap();
+    let snaps = snapshot_dir();
+    let shard = create(dir.path());
+    upsert(
+        &shard,
+        (0..20)
+            .map(|i| point(i, i as f32, json!({"colour": "red"})))
+            .collect(),
+    );
+    shard.flush().unwrap();
+    shard.create_payload_index(keyword("colour")).unwrap();
+    upsert(
+        &shard,
+        (10..25)
+            .map(|i| point(i, 7.0, json!({"colour": "blue"})))
+            .collect(),
+    );
+    shard
+        .write(Operation::Delete(vec![PointId::Num(3)]), Ack::Applied)
+        .unwrap();
+    let before = contents(&shard);
+
+    let path = snaps.path().join(snapshot_name("test"));
+    let info = shard.snapshot(&path).unwrap();
+    assert_eq!(info.seq, 3);
+    assert!(path.exists() && info.bytes == fs::metadata(&path).unwrap().len());
+    assert!(
+        shard.snapshot(&path).is_err(),
+        "an existing snapshot is never overwritten"
+    );
+
+    let target = TempDir::new().unwrap().path().join("restored");
+    restore(&path, &target).unwrap();
+    let restored = reopen(&target);
+    assert_eq!(contents(&restored), before);
+    assert_eq!(restored.payload_indexes(), [keyword("colour")]);
+    assert!(restore(&path, &target).is_err(), "restore never overwrites");
+}
+
+/// A snapshot taken while another thread writes holds every write acknowledged before it
+/// started, and is exactly the result of some prefix of the writes.
+#[test]
+fn a_snapshot_during_writes_is_a_prefix_of_history() {
+    let dir = TempDir::new().unwrap();
+    let snaps = snapshot_dir();
+    let shard = Arc::new(create(dir.path()));
+    let ops: Vec<Operation> = (0..400u64)
+        .map(|i| match i % 4 {
+            3 => Operation::SetPayload {
+                ids: vec![PointId::Num(i % 11)],
+                payload: payload(json!({"i": i})),
+            },
+            2 => Operation::Delete(vec![PointId::Num(i % 13)]),
+            _ => Operation::Upsert(vec![point(i % 17, i as f32, json!({"i": i}))]),
+        })
+        .collect();
+    let acked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let writer = {
+        let (shard, acked, ops) = (shard.clone(), acked.clone(), ops.clone());
+        std::thread::spawn(move || {
+            for (i, op) in ops.into_iter().enumerate() {
+                shard.write(op, Ack::Applied).unwrap();
+                acked.store(i + 1, Ordering::Release);
+                if i % 50 == 49 {
+                    shard.flush().unwrap();
+                }
+            }
+        })
+    };
+    while acked.load(Ordering::Acquire) < 150 {
+        std::thread::yield_now();
+    }
+    let before = acked.load(Ordering::Acquire);
+    let path = snaps.path().join("mid.snapshot");
+    shard.snapshot(&path).unwrap();
+    writer.join().unwrap();
+
+    let target = snaps.path().join("restored");
+    restore(&path, &target).unwrap();
+    let got = contents(&reopen(&target));
+    let mut model = BTreeMap::new();
+    let mut prefixes = Vec::new();
+    for op in &ops {
+        prefixes.push(model.clone());
+        apply_model(&mut model, op);
+    }
+    prefixes.push(model);
+    let k = prefixes
+        .iter()
+        .position(|m| *m == got)
+        .expect("the snapshot matches no prefix");
+    assert!(
+        k >= before,
+        "the snapshot holds {k} writes, {before} were acknowledged before it"
+    );
+}
+
+#[test]
+fn damaged_or_foreign_snapshots_are_refused() {
+    let dir = TempDir::new().unwrap();
+    let snaps = snapshot_dir();
+    let shard = create(dir.path());
+    upsert(&shard, vec![point(1, 1.0, json!({}))]);
+    let path = snaps.path().join("a.snapshot");
+    shard.snapshot(&path).unwrap();
+    let target = snaps.path().join("restored");
+
+    let original = fs::read(&path).unwrap();
+    let mut damaged = original.clone();
+    damaged[600] ^= 1;
+    fs::write(&path, &damaged).unwrap();
+    assert!(matches!(
+        restore(&path, &target),
+        Err(Error::Corrupt { .. })
+    ));
+    assert!(!target.exists());
+    fs::write(&path, &original).unwrap();
+    fs::remove_file(snaps.path().join("a.snapshot.sha256")).unwrap();
+    assert!(
+        restore(&path, &target).is_err(),
+        "a snapshot without its sidecar is unfinished"
+    );
+
+    // A tar naming a file outside the shard, with a correct sidecar, is refused.
+    let evil = snaps.path().join("evil.snapshot");
+    let mut tar = tar::Builder::new(Vec::new());
+    let mut header = tar::Header::new_gnu();
+    header.as_gnu_mut().unwrap().name[..7].copy_from_slice(b"../evil");
+    header.set_size(1);
+    header.set_mode(0o644);
+    header.set_cksum();
+    tar.append(&header, &b"x"[..]).unwrap();
+    let bytes = tar.into_inner().unwrap();
+    fs::write(&evil, &bytes).unwrap();
+    use sha2::Digest;
+    let sum: String = sha2::Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    fs::write(
+        snaps.path().join("evil.snapshot.sha256"),
+        format!("{sum}  evil.snapshot\n"),
+    )
+    .unwrap();
+    assert!(matches!(
+        restore(&evil, &target),
+        Err(Error::Corrupt { .. })
+    ));
+    assert!(!snaps.path().join("evil").exists() && !target.exists());
+}
+
+#[test]
+fn prune_keeps_the_newest_good_snapshots() {
+    let dir = TempDir::new().unwrap();
+    let snaps = snapshot_dir();
+    let shard = create(dir.path());
+    for i in 0..5u64 {
+        upsert(&shard, vec![point(i, 1.0, json!({}))]);
+        shard
+            .snapshot(&snaps.path().join(format!("c-{i:015}.snapshot")))
+            .unwrap();
+    }
+    // The newest is damaged, so it does not count, and an unfinished one is too young to be
+    // abandoned.
+    let newest = snaps.path().join("c-000000000000004.snapshot");
+    let mut bytes = fs::read(&newest).unwrap();
+    bytes[700] ^= 1;
+    fs::write(&newest, &bytes).unwrap();
+    fs::write(snaps.path().join("c-9.snapshot.1-0.partial"), b"half").unwrap();
+
+    let pruned = prune(snaps.path(), 2).unwrap();
+    assert_eq!(pruned.invalid, [newest]);
+    assert_eq!(pruned.deleted.len(), 2);
+    let mut left: Vec<_> = fs::read_dir(snaps.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    left.sort();
+    assert_eq!(
+        left,
+        [
+            "c-000000000000002.snapshot",
+            "c-000000000000002.snapshot.sha256",
+            "c-000000000000003.snapshot",
+            "c-000000000000003.snapshot.sha256",
+            "c-000000000000004.snapshot",
+            "c-000000000000004.snapshot.sha256",
+            "c-9.snapshot.1-0.partial",
+        ]
+    );
+}
+
+/// A snapshot that checks out but does not hold a shard that opens is refused, and the
+/// target name is left free.
+#[test]
+fn an_incomplete_snapshot_is_refused_before_it_takes_the_target() {
+    let snaps = snapshot_dir();
+    let path = snaps.path().join("thin.snapshot");
+    let mut tar = tar::Builder::new(Vec::new());
+    let info = br#"{"format":1,"seq":5,"vectors":{"dim":3,"distance":"dot"}}"#;
+    let mut header = tar::Header::new_gnu();
+    header.set_size(info.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    tar.append_data(&mut header, "nocturnum-snapshot.json", &info[..])
+        .unwrap();
+    let bytes = tar.into_inner().unwrap();
+    fs::write(&path, &bytes).unwrap();
+    use sha2::Digest;
+    let sum: String = sha2::Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    fs::write(
+        snaps.path().join("thin.snapshot.sha256"),
+        format!("{sum}  thin.snapshot\n"),
+    )
+    .unwrap();
+    let target = snaps.path().join("restored");
+    assert!(matches!(
+        restore(&path, &target),
+        Err(Error::Corrupt { .. })
+    ));
+    assert!(!target.exists());
+    let leftovers = fs::read_dir(snaps.path()).unwrap().count();
+    assert_eq!(leftovers, 2, "staging was left behind");
+}
+
+#[test]
+fn snapshots_never_replace_an_existing_file() {
+    let dir = TempDir::new().unwrap();
+    let snaps = snapshot_dir();
+    let shard = Arc::new(create(dir.path()));
+    upsert(&shard, vec![point(1, 1.0, json!({}))]);
+    let path = snaps.path().join("same.snapshot");
+    let threads: Vec<_> = (0..4)
+        .map(|_| {
+            let (shard, path) = (shard.clone(), path.clone());
+            std::thread::spawn(move || shard.snapshot(&path).is_ok())
+        })
+        .collect();
+    let won = threads
+        .into_iter()
+        .map(|t| t.join().unwrap())
+        .filter(|ok| *ok)
+        .count();
+    assert_eq!(won, 1);
+    let target = snaps.path().join("restored");
+    restore(&path, &target).unwrap();
+    let names: Vec<_> = fs::read_dir(snaps.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(!names.iter().any(|n| n.ends_with(".partial")), "{names:?}");
+}
+
+/// Found by the audit: tar writes files with holes as sparse entries, which restore refuses,
+/// so snapshots turn sparse output off. The tar crate only looks for holes on Linux and
+/// FreeBSD, so this test can only fail there, which includes the homelab's deploy target.
+#[test]
+fn a_shard_with_sparse_files_snapshots_and_restores() {
+    let dir = TempDir::new().unwrap();
+    let snaps = snapshot_dir();
+    let shard = create(dir.path());
+    upsert(
+        &shard,
+        (0..2000)
+            .map(|i| point(i, 0.0, json!({})))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|mut p| {
+                p.vector = vec![0.0; DIM];
+                p
+            })
+            .collect(),
+    );
+    shard.flush().unwrap();
+    drop(shard);
+    // Rewrite the all-zero vectors file as one big hole, same bytes, same checksum.
+    let seg = fs::read_dir(dir.path().join("segments"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let vectors = seg.join("vectors.bin");
+    let len = fs::metadata(&vectors).unwrap().len();
+    assert!(fs::read(&vectors).unwrap().iter().all(|b| *b == 0));
+    fs::remove_file(&vectors).unwrap();
+    fs::File::create(&vectors).unwrap().set_len(len).unwrap();
+    let shard = reopen(dir.path());
+    let before = contents(&shard);
+
+    let path = snaps.path().join("sparse.snapshot");
+    shard.snapshot(&path).unwrap();
+    let target = snaps.path().join("restored");
+    restore(&path, &target).unwrap();
+    assert_eq!(contents(&reopen(&target)), before);
+}
+
+#[test]
+fn prune_leaves_staging_a_live_process_owns() {
+    let snaps = snapshot_dir();
+    let old = std::time::SystemTime::now() - Duration::from_secs(7200);
+    let make = |name: &str| {
+        let path = snaps.path().join(name);
+        let f = fs::File::create(&path).unwrap();
+        f.set_modified(old).unwrap();
+        path
+    };
+    // This process, not writing it: abandoned. Process 1 always exists: in use.
+    let mine = make(&format!("a.snapshot.{}-999999.partial", std::process::id()));
+    let live = make("b.snapshot.1-0.partial");
+    let pruned = prune(snaps.path(), 3).unwrap();
+    assert_eq!(pruned.deleted, [mine]);
+    assert!(live.exists());
+
+    // A staging file this process is still writing is kept, whatever path prune is given.
+    let writing = super::snapshot::staging(&snaps.path().join("c.snapshot"));
+    let f = fs::File::create(&*writing).unwrap();
+    f.set_modified(old).unwrap();
+    let relative_dir = snaps.path().join(".").join("");
+    assert!(prune(&relative_dir, 3).unwrap().deleted.is_empty());
+    assert!(writing.exists());
+}
+
+#[test]
+fn an_oversized_manifest_is_refused_before_it_is_read() {
+    let dir = TempDir::new().unwrap();
+    drop(create(dir.path()));
+    let manifest = dir.path().join("MANIFEST");
+    fs::File::options()
+        .write(true)
+        .open(&manifest)
+        .unwrap()
+        .set_len(64 * 1024 * 1024)
+        .unwrap();
+    assert!(Shard::open(dir.path(), opts(), None).is_err());
+}
+
 fn apply_model(model: &mut BTreeMap<PointId, Record>, op: &Operation) {
     match op {
         Operation::Upsert(points) => {

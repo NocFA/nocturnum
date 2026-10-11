@@ -41,7 +41,7 @@
 //! record after the manifest's watermark.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -940,8 +940,10 @@ impl View<'_> {
 }
 
 mod merge;
+mod snapshot;
 
 pub use merge::{Job, OptimizerOptions, OptimizerStatus};
+pub use snapshot::{Pruned, SnapshotInfo, prune, restore, snapshot_name};
 
 #[cfg(test)]
 mod tests;

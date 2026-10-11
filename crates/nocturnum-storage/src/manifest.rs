@@ -18,11 +18,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::crash::crash_point;
 use crate::error::{Error, IoContext, Result};
-use crate::sync::{sync_dir, sync_file};
+use crate::sync::{read_bounded, sync_dir, sync_file};
 
 const FORMAT_VERSION: u32 = 1;
 pub const FILE_NAME: &str = "MANIFEST";
 const TMP_NAME: &str = "MANIFEST.tmp";
+/// Far above any real manifest, which lists segment ids and payload indexes.
+const MAX_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -63,11 +65,16 @@ impl Manifest {
     /// Reads the manifest in `dir`, `None` when there is none yet.
     pub fn read(dir: &Path) -> Result<Option<Manifest>> {
         let path = dir.join(FILE_NAME);
-        let text = match fs::read_to_string(&path) {
-            Ok(t) => t,
+        let bytes = match read_bounded(&path, MAX_MANIFEST_BYTES) {
+            Ok(b) => b,
             Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e).ctx(|| format!("reading {}", path.display())),
         };
+        let text = String::from_utf8(bytes).map_err(|_| Error::Corrupt {
+            path: path.clone(),
+            offset: 0,
+            reason: "the manifest is not UTF-8".into(),
+        })?;
         let corrupt = |reason: &str| Error::Corrupt {
             path: path.clone(),
             offset: 0,

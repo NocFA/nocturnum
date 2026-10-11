@@ -16,6 +16,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use nocturnum_core::{Ack, Distance, Payload, PointId, VectorConfig};
+use nocturnum_storage::shard::{prune, restore, snapshot_name};
 use nocturnum_storage::{
     GraphOptions, Operation, OptimizerOptions, PointWrite, Record, Shard, ShardOptions, WalOptions,
 };
@@ -26,6 +27,15 @@ const CHILD_ENV: &str = "NOCTURNUM_SHARD_CRASH_CHILD";
 const FLUSH_EVERY: u64 = 25;
 
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
+#[derive(Clone, Copy)]
+enum Mode {
+    Plain,
+    /// Merges and vacuums halfway between flushes.
+    Optimize,
+    /// Takes a snapshot every 20 writes, keeping the newest three.
+    Snapshot,
+}
 
 fn config() -> VectorConfig {
     VectorConfig {
@@ -160,7 +170,9 @@ fn shard_crash_child() {
         std::process::exit(101);
     }));
     let mut parts = spec.rsplitn(3, ',');
-    let optimize = parts.next().unwrap() == "optimize";
+    let mode = parts.next().unwrap();
+    let optimize = mode == "optimize";
+    let snapshots = mode == "snapshot";
     let run: u64 = parts.next().unwrap().parse().unwrap();
     let dir = parts.next().unwrap();
     // A limit of two segments makes nearly every flush trigger a merge, and vacuums follow
@@ -181,6 +193,13 @@ fn shard_crash_child() {
         if counter % FLUSH_EVERY == FLUSH_EVERY - 1 {
             shard.flush().expect("flush");
         }
+        if snapshots && counter % 20 == 10 {
+            let dir = format!("{dir}-snaps");
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = Path::new(&dir).join(snapshot_name("s"));
+            shard.snapshot(&path).expect("snapshot");
+            prune(Path::new(&dir), 3).expect("prune");
+        }
         // Halfway between flushes, so merges run while the memtable holds changes that hide
         // rows in the segments being merged.
         if optimize && counter % FLUSH_EVERY == FLUSH_EVERY / 2 {
@@ -196,7 +215,7 @@ fn run_child(
     run: u64,
     kill_after: Option<Duration>,
     crash_at: Option<&str>,
-    optimize: bool,
+    mode: Mode,
 ) -> Option<u64> {
     let mut cmd = Command::new(std::env::current_exe().unwrap());
     cmd.args([
@@ -211,7 +230,11 @@ fn run_child(
         format!(
             "{},{run},{}",
             dir.display(),
-            if optimize { "optimize" } else { "plain" }
+            match mode {
+                Mode::Plain => "plain",
+                Mode::Optimize => "optimize",
+                Mode::Snapshot => "snapshot",
+            }
         ),
     )
     .env_remove("NOCTURNUM_CRASH_AT")
@@ -331,7 +354,7 @@ fn acknowledged_writes_survive_sigkill_across_flushes() {
     let mut total = 0;
     for run in 0..20 {
         let after = Duration::from_micros(10_000 + rng.below(250_000));
-        let acked = run_child(dir.path(), run, Some(after), None, false);
+        let acked = run_child(dir.path(), run, Some(after), None, Mode::Plain);
         total += acked.map_or(0, |k| k + 1);
         verify(dir.path(), &mut model, run, acked, &format!("run {run}"));
     }
@@ -359,9 +382,15 @@ fn every_flush_crash_point_recovers() {
         let mut model = BTreeMap::new();
         // Run 0 crashes at the point, run 1 carries on from there and is killed, both must
         // recover to an acknowledged state.
-        let acked = run_child(dir.path(), 0, None, Some(point), false);
+        let acked = run_child(dir.path(), 0, None, Some(point), Mode::Plain);
         verify(dir.path(), &mut model, 0, acked, point);
-        let acked = run_child(dir.path(), 1, Some(Duration::from_millis(60)), None, false);
+        let acked = run_child(
+            dir.path(),
+            1,
+            Some(Duration::from_millis(60)),
+            None,
+            Mode::Plain,
+        );
         verify(
             dir.path(),
             &mut model,
@@ -379,7 +408,13 @@ fn a_crash_during_creation_leaves_no_shard() {
     let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let dir = TempDir::new().unwrap();
     assert_eq!(
-        run_child(dir.path(), 0, None, Some("manifest.tmp_written:1"), false),
+        run_child(
+            dir.path(),
+            0,
+            None,
+            Some("manifest.tmp_written:1"),
+            Mode::Plain
+        ),
         None
     );
     assert!(matches!(
@@ -404,7 +439,7 @@ fn acknowledged_writes_survive_sigkill_while_merging() {
     let mut total = 0;
     for run in 0..20 {
         let after = Duration::from_micros(10_000 + rng.below(250_000));
-        let acked = run_child(dir.path(), run, Some(after), None, true);
+        let acked = run_child(dir.path(), run, Some(after), None, Mode::Optimize);
         total += acked.map_or(0, |k| k + 1);
         verify(
             dir.path(),
@@ -432,9 +467,15 @@ fn every_merge_crash_point_recovers() {
     for point in points {
         let dir = TempDir::new().unwrap();
         let mut model = BTreeMap::new();
-        let acked = run_child(dir.path(), 0, None, Some(point), true);
+        let acked = run_child(dir.path(), 0, None, Some(point), Mode::Optimize);
         verify(dir.path(), &mut model, 0, acked, point);
-        let acked = run_child(dir.path(), 1, Some(Duration::from_millis(60)), None, true);
+        let acked = run_child(
+            dir.path(),
+            1,
+            Some(Duration::from_millis(60)),
+            None,
+            Mode::Optimize,
+        );
         verify(
             dir.path(),
             &mut model,
@@ -443,4 +484,80 @@ fn every_merge_crash_point_recovers() {
             &format!("{point}, next run"),
         );
     }
+}
+
+/// Every state the shard went through in one run, for matching snapshots against.
+fn states_of_run(
+    start: &BTreeMap<PointId, Record>,
+    run: u64,
+    acked: Option<u64>,
+) -> Vec<BTreeMap<PointId, Record>> {
+    let mut state = start.clone();
+    let mut out = vec![state.clone()];
+    for counter in 0..acked.map_or(1, |k| k + 2) {
+        apply(&mut state, &operation(run, counter));
+        out.push(state.clone());
+    }
+    out
+}
+
+/// The newest finished snapshot restores to some state the shard actually passed through.
+fn check_newest_snapshot(snaps: &Path, history: &[BTreeMap<PointId, Record>], context: &str) {
+    let Ok(entries) = std::fs::read_dir(snaps) else {
+        return;
+    };
+    let mut finished: Vec<_> = entries
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "snapshot"))
+        .filter(|p| p.with_extension("snapshot.sha256").exists())
+        .collect();
+    finished.sort();
+    let Some(newest) = finished.last() else {
+        return;
+    };
+    let target = snaps.join(format!("restored-{}", history.len()));
+    restore(newest, &target).unwrap_or_else(|e| panic!("{context}: restore failed: {e}"));
+    let (shard, _) = Shard::open(&target, opts(), None).unwrap();
+    let got = contents(&shard);
+    assert!(
+        history.contains(&got),
+        "{context}: the newest snapshot matches no state the shard passed through"
+    );
+}
+
+#[test]
+fn snapshots_survive_crashes_and_restore_to_a_real_state() {
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path().join("shard");
+    let snaps = tmp.path().join("shard-snaps");
+    let mut model = BTreeMap::new();
+    let mut history = Vec::new();
+    let mut rng = Rng::new(7);
+    for run in 0..8 {
+        let start = model.clone();
+        let (crash_at, kill) = if run % 2 == 0 {
+            (Some("snapshot.written_not_renamed:2"), None)
+        } else {
+            (
+                None,
+                Some(Duration::from_micros(20_000 + rng.below(200_000))),
+            )
+        };
+        let acked = run_child(&dir, run, kill, crash_at, Mode::Snapshot);
+        verify(&dir, &mut model, run, acked, &format!("snapshot run {run}"));
+        history.extend(states_of_run(&start, run, acked));
+        check_newest_snapshot(&snaps, &history, &format!("snapshot run {run}"));
+    }
+    let restored = std::fs::read_dir(&snaps)
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("restored")
+        })
+        .count();
+    assert!(restored >= 6, "only {restored} snapshots were checked");
 }

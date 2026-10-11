@@ -70,3 +70,29 @@ pub(crate) fn create_dir_all_durable(dir: &Path) -> io::Result<()> {
     }
     sync_dir(dir)
 }
+
+/// Reads a small file whole, refusing one larger than `max` bytes before allocating for it,
+/// so a damaged or hostile metadata file cannot exhaust memory.
+pub(crate) fn read_bounded(path: &Path, max: u64) -> io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut f = File::open(path)?;
+    let len = f.metadata()?.len();
+    if len > max {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{} is {len} bytes, more than the {max} it may be",
+                path.display()
+            ),
+        ));
+    }
+    let mut out = Vec::with_capacity(len as usize);
+    f.by_ref().take(max + 1).read_to_end(&mut out)?;
+    if out.len() as u64 > max {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{} grew past {max} bytes while it was read", path.display()),
+        ));
+    }
+    Ok(out)
+}

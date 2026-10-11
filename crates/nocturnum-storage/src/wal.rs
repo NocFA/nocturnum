@@ -389,7 +389,7 @@ fn scan_segment(path: &Path, first_seq: u64) -> Result<Scan> {
     Ok(scan)
 }
 
-fn list_segments(dir: &Path) -> Result<Vec<(u64, PathBuf)>> {
+pub(crate) fn list_segments(dir: &Path) -> Result<Vec<(u64, PathBuf)>> {
     let mut found = Vec::new();
     for entry in fs::read_dir(dir).ctx(|| format!("listing {}", dir.display()))? {
         let entry = entry.ctx(|| format!("listing {}", dir.display()))?;
