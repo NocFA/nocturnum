@@ -24,6 +24,11 @@ fn opts() -> ShardOptions {
         },
         flush_bytes: 4096,
         background_sync: Duration::from_millis(50),
+        // Every flushed segment builds a graph, so graphs go through every path tested here.
+        graph: GraphOptions {
+            min_bytes: 0,
+            ..GraphOptions::default()
+        },
     }
 }
 

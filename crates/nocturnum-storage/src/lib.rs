@@ -11,6 +11,7 @@ pub mod wal;
 
 pub use error::{Error, Result};
 pub use op::{Operation, PointWrite};
+pub use segment::GraphOptions;
 pub use shard::{
     PointRef, Record, SegmentView, Shard, ShardOptions, ShardRecovery, View, WriteError,
 };

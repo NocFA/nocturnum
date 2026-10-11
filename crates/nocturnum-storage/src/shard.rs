@@ -43,14 +43,14 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuar
 use std::time::Duration;
 
 use nocturnum_core::{Ack, Payload, PayloadIndexSpec, PointId, VectorConfig};
-use nocturnum_index::PayloadIndex;
+use nocturnum_index::{Hnsw, PayloadIndex};
 use roaring::RoaringBitmap;
 
 use crate::crash::crash_point;
 use crate::error::{Error, IoContext, Result};
 use crate::manifest::Manifest;
 use crate::op::{Operation, PointWrite};
-use crate::segment::{Entry, EntryIn, Segment, segment_dir_name, write_segment};
+use crate::segment::{Entry, EntryIn, GraphOptions, Segment, segment_dir_name, write_segment};
 use crate::sync::{create_dir_all_durable, sync_dir};
 use crate::wal::{PeriodicSync, Wal, WalOptions};
 
@@ -63,6 +63,8 @@ pub struct ShardOptions {
     /// How often the WAL is synced in the background, which bounds what `applied` and
     /// `accepted` writes can lose on power loss.
     pub background_sync: Duration,
+    /// Which new segments get a graph index.
+    pub graph: GraphOptions,
 }
 
 impl Default for ShardOptions {
@@ -71,6 +73,7 @@ impl Default for ShardOptions {
             wal: WalOptions::default(),
             flush_bytes: 32 * 1024 * 1024,
             background_sync: Duration::from_secs(1),
+            graph: GraphOptions::default(),
         }
     }
 }
@@ -438,7 +441,7 @@ impl Shard {
             payload_indexes: manifest.payload_indexes.clone(),
         };
         for (id, name) in manifest.segments.iter().zip(&listed) {
-            let segment = Segment::open(&seg_root.join(name), *id, config.dim)?;
+            let segment = Segment::open(&seg_root.join(name), *id, config)?;
             state
                 .slots
                 .push(Slot::new(Arc::new(segment), &manifest.payload_indexes)?);
@@ -635,10 +638,11 @@ impl Shard {
             &seg_root.join(format!("tmp-{seg_id:016x}")),
             &dest,
             seg_id,
-            self.config.dim,
+            self.config,
+            Some(&self.opts.graph),
             entries,
         )?;
-        let segment = Arc::new(Segment::open(&dest, seg_id, self.config.dim)?);
+        let segment = Arc::new(Segment::open(&dest, seg_id, self.config)?);
         let mut slot = Slot::new(segment, &manifest.payload_indexes)?;
         crash_point("shard.flush.segment_published", || {});
 
@@ -867,6 +871,11 @@ impl<'a> SegmentView<'a> {
 
     pub fn payload_index(&self) -> &'a PayloadIndex {
         &self.slot.payload_index
+    }
+
+    /// The segment's graph index, if it was big enough to get one.
+    pub fn graph(&self) -> Option<&'a Hnsw> {
+        self.slot.segment.graph()
     }
 }
 

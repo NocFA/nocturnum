@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use nocturnum_core::{Distance, PayloadIndexKind};
-use nocturnum_storage::WalOptions;
+use nocturnum_storage::{GraphOptions, WalOptions};
 use proptest::prelude::*;
+use proptest::strategy::Strategy;
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -17,6 +18,11 @@ fn options() -> ShardOptions {
         },
         flush_bytes: usize::MAX,
         background_sync: Duration::from_millis(50),
+        // Every flushed segment builds a graph, so graphs go through every path tested here.
+        graph: GraphOptions {
+            min_bytes: 0,
+            ..GraphOptions::default()
+        },
     }
 }
 
@@ -369,4 +375,79 @@ fn requests_out_of_bounds_are_refused() {
         c.count(Some(&bad_filter)),
         Err(QueryError::Invalid(_))
     ));
+}
+
+/// With segments big enough for graphs and a planner willing to use them, search walks the
+/// graphs: a tiny beam misses some true neighbours, which proves the graph path ran, and the
+/// default beam finds nearly all of them, with and without a filter.
+#[test]
+fn search_walks_segment_graphs_when_the_planner_says_so() {
+    let dir = TempDir::new().unwrap();
+    let c = Collection::open(
+        dir.path(),
+        options(),
+        Some(VectorConfig {
+            dim: 16,
+            distance: Distance::Euclid,
+        }),
+    )
+    .unwrap()
+    .0
+    .with_plan_options(crate::PlanOptions {
+        enumerate_up_to: 100,
+        samples: 64,
+    });
+    let mut x = 0x1234_5678_9abc_def1u64;
+    let mut next = move || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        (x >> 40) as f32 / (1u64 << 24) as f32
+    };
+    for batch in 0..4u64 {
+        let points = (0..1_000u64)
+            .map(|i| {
+                let id = batch * 1_000 + i;
+                PointWrite {
+                    id: PointId::Num(id),
+                    vector: (0..16).map(|_| next()).collect(),
+                    payload: payload(json!({"half": id % 2 == 0})),
+                }
+            })
+            .collect();
+        c.upsert(points, Ack::Applied).unwrap();
+        c.flush().unwrap();
+    }
+    c.create_payload_index(spec("half", PayloadIndexKind::Bool))
+        .unwrap();
+
+    let half = filter(json!({"must": [{"key": "half", "match": true}]}));
+    for f in [None, Some(half)] {
+        let mut recall = |ef: usize| {
+            let mut hits = 0;
+            for _ in 0..30 {
+                let mut req = SearchRequest::new((0..16).map(|_| next()).collect(), 10);
+                req.filter = f.clone();
+                req.exact = true;
+                let exact: HashSet<_> = c.search(&req).unwrap().iter().map(|s| s.id).collect();
+                req.exact = false;
+                req.hnsw_ef = Some(ef);
+                let got = c.search(&req).unwrap();
+                if let Some(f) = &f {
+                    for s in &got {
+                        let p = &c.retrieve(&[s.id], &WithPayload::All, false).unwrap()[0];
+                        assert!(f.matches(s.id, p.payload.as_ref().unwrap()));
+                    }
+                }
+                hits += got.iter().filter(|s| exact.contains(&s.id)).count();
+            }
+            hits as f64 / 300.0
+        };
+        let (low, high) = (recall(10), recall(128));
+        assert!(
+            low < 1.0,
+            "a beam of 10 found everything, so the graphs were not used"
+        );
+        assert!(high >= 0.95, "recall at ef 128 was {high:.3}, filter {f:?}");
+    }
 }

@@ -13,8 +13,8 @@
 //! threshold, and then it comes from reading a small sample of the uncertain rows, one from
 //! each stretch of equal size.
 //!
-//! Until segments carry a graph, both strategies run as a filtered flat scan,
-//! [`nocturnum_index::flat::search_filtered`], which is exact either way.
+//! A segment without a graph, too small to have been given one, always runs the filtered flat
+//! scan, [`nocturnum_index::flat::search_filtered`].
 
 use nocturnum_core::Filter;
 use nocturnum_index::{Bounds, PayloadIndex};
@@ -73,6 +73,15 @@ pub fn plan<E>(
     if let Some(live) = live {
         bounds.restrict(live);
     }
+    choose(bounds, options, check)
+}
+
+/// Plans from bounds already worked out, see [`plan`].
+pub fn choose<E>(
+    bounds: Bounds,
+    options: &PlanOptions,
+    check: impl FnMut(u32) -> Result<bool, E>,
+) -> Result<Plan, E> {
     let (min, max) = (bounds.sure.len(), bounds.maybe.len());
     let (estimate, strategy) = if max <= options.enumerate_up_to {
         (unsampled(min, max), Strategy::Enumerate)

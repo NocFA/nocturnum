@@ -8,6 +8,7 @@
 //! | `vectors.bin` | one row of `dim` little-endian `f32` per live point, memory mapped |
 //! | `payloads.bin` | each live point's payload as JSON, back to back |
 //! | `payload_offsets.bin` | `rows + 1` little-endian `u64` offsets into `payloads.bin` |
+//! | `graph.bin` | the HNSW graph, only in segments with at least [`GraphOptions::min_bytes`] of vectors, see `docs/specs/hnsw.md` |
 //! | `meta.json` | format version, counts, the range of WAL sequence numbers and every file's length and CRC32C |
 //!
 //! A deletion is kept as an entry without a row, because it has to hide older copies of the
@@ -21,11 +22,13 @@
 compile_error!("segment files store little-endian floats and are memory mapped as native ones");
 
 use std::fs::{self, File};
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
 use memmap2::Mmap;
-use nocturnum_core::{Payload, PointId};
+use nocturnum_core::{Payload, PointId, VectorConfig};
+use nocturnum_index::hnsw::{HEADER_LEN, max_file_len};
+use nocturnum_index::{Hnsw, HnswConfig};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -36,6 +39,8 @@ use crate::sync::{sync_dir, sync_file};
 const FORMAT_VERSION: u32 = 1;
 const ENTRY_LEN: usize = 29;
 const NO_ROW: u32 = u32::MAX;
+/// The optional graph index, present when the segment was big enough, see `docs/specs/hnsw.md`.
+const GRAPH_FILE: &str = "graph.bin";
 const FILES: [&str; 4] = [
     "entries.bin",
     "vectors.bin",
@@ -79,6 +84,24 @@ struct Meta {
     files: std::collections::BTreeMap<String, FileMeta>,
 }
 
+/// When a new segment gets a graph index, and how it is built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GraphOptions {
+    pub config: HnswConfig,
+    /// Segments whose vectors take at least this many bytes get a graph, smaller ones are
+    /// cheap enough to scan.
+    pub min_bytes: usize,
+}
+
+impl Default for GraphOptions {
+    fn default() -> Self {
+        GraphOptions {
+            config: HnswConfig::default(),
+            min_bytes: 10 * 1024 * 1024,
+        }
+    }
+}
+
 pub fn segment_dir_name(id: u64) -> String {
     format!("seg-{id:016x}")
 }
@@ -89,9 +112,11 @@ pub(crate) fn write_segment<'a>(
     tmp: &Path,
     dest: &Path,
     id: u64,
-    dim: usize,
+    vectors: VectorConfig,
+    graph: Option<&GraphOptions>,
     entries: impl IntoIterator<Item = EntryIn<'a>>,
 ) -> Result<()> {
+    let dim = vectors.dim;
     if tmp.exists() {
         fs::remove_dir_all(tmp).ctx(|| format!("clearing {}", tmp.display()))?;
     }
@@ -114,6 +139,8 @@ pub(crate) fn write_segment<'a>(
     let mut payload_at = 0u64;
     let mut last_id: Option<PointId> = None;
     w_offsets.put(&0u64.to_le_bytes())?;
+    // Kept in memory for building the graph, when the segment may get one.
+    let mut all_vectors: Option<Vec<f32>> = graph.map(|_| Vec::new());
     for e in entries {
         assert!(
             last_id < Some(e.id),
@@ -127,6 +154,9 @@ pub(crate) fn write_segment<'a>(
                 assert_eq!(vector.len(), dim, "vector dimension");
                 for x in vector {
                     w_vectors.put(&x.to_le_bytes())?;
+                }
+                if let Some(all) = &mut all_vectors {
+                    all.extend_from_slice(vector);
                 }
                 let json = serde_json::to_vec(payload).expect("a payload always serialises");
                 w_payloads.put(&json)?;
@@ -160,6 +190,17 @@ pub(crate) fn write_segment<'a>(
 
     let mut files = std::collections::BTreeMap::new();
     for w in writers {
+        let (name, meta) = w.finish()?;
+        files.insert(name, meta);
+    }
+    if let (Some(g), Some(all)) = (graph, all_vectors)
+        && all.len().saturating_mul(4) >= g.min_bytes
+    {
+        let hnsw = Hnsw::build(vectors.distance, &all, dim, g.config);
+        let path = tmp.join(GRAPH_FILE);
+        let file = File::create(&path).ctx(|| format!("creating {}", path.display()))?;
+        let mut w = CrcWriter::new(file, path);
+        w.put(&hnsw.to_bytes())?;
         let (name, meta) = w.finish()?;
         files.insert(name, meta);
     }
@@ -249,6 +290,7 @@ pub struct Segment {
     vectors: Option<Mmap>,
     payloads: Option<Mmap>,
     payload_offsets: Vec<u64>,
+    graph: Option<Hnsw>,
 }
 
 impl std::fmt::Debug for Segment {
@@ -280,7 +322,12 @@ fn map_file(path: &Path) -> Result<Option<Mmap>> {
 impl Segment {
     /// Loads the segment in `dir`, checking every file against its recorded length and
     /// checksum.
-    pub(crate) fn open(dir: &Path, expected_id: u64, dim: usize) -> Result<Segment> {
+    pub(crate) fn open(
+        dir: &Path,
+        expected_id: u64,
+        vectors_config: VectorConfig,
+    ) -> Result<Segment> {
+        let dim = vectors_config.dim;
         let corrupt = |reason: String| Error::Corrupt {
             path: dir.to_owned(),
             offset: 0,
@@ -384,7 +431,52 @@ impl Segment {
             return Err(corrupt("payload offsets are out of order".into()));
         }
 
+        let graph = match meta.files.get(GRAPH_FILE) {
+            None => None,
+            Some(want) => {
+                let path = dir.join(GRAPH_FILE);
+                // The size is checked against what the segment's rows allow before the file is
+                // read, so a damaged length cannot make opening read gigabytes.
+                let mut file = File::open(&path).ctx(|| format!("opening {}", path.display()))?;
+                let len = file
+                    .metadata()
+                    .ctx(|| format!("reading the size of {}", path.display()))?
+                    .len();
+                let mut header = [0u8; HEADER_LEN];
+                file.read_exact(&mut header)
+                    .ctx(|| format!("reading {}", path.display()))?;
+                let limit = max_file_len(&header, meta.rows).map_err(|e| corrupt(e.to_string()))?;
+                if len != want.len || len > limit {
+                    return Err(corrupt(format!(
+                        "{GRAPH_FILE} is {len} bytes, more than {} rows allow or meta.json records",
+                        meta.rows
+                    )));
+                }
+                let mut bytes = header.to_vec();
+                file.read_to_end(&mut bytes)
+                    .ctx(|| format!("reading {}", path.display()))?;
+                if bytes.len() as u64 != want.len || crc32c::crc32c(&bytes) != want.crc32c {
+                    return Err(corrupt(format!(
+                        "{GRAPH_FILE} does not match its recorded checksum"
+                    )));
+                }
+                let graph = Hnsw::from_bytes(&bytes, vectors_config.distance, dim, meta.rows)
+                    .map_err(|e| corrupt(e.to_string()))?;
+                Some(graph)
+            }
+        };
+        if let Some(extra) = meta
+            .files
+            .keys()
+            .find(|k| !FILES.contains(&k.as_str()) && k.as_str() != GRAPH_FILE)
+        {
+            return Err(corrupt(format!(
+                "meta.json lists {extra}, which this build does not know"
+            )));
+        }
+
         Ok(Segment {
+            graph,
             id: expected_id,
             dir: dir.to_owned(),
             dim,
@@ -397,6 +489,11 @@ impl Segment {
 
     pub fn id(&self) -> u64 {
         self.id
+    }
+
+    /// The segment's graph index, if it was big enough to get one.
+    pub fn graph(&self) -> Option<&Hnsw> {
+        self.graph.as_ref()
     }
 
     /// Every entry, sorted by id, deletions included.
@@ -445,6 +542,13 @@ mod tests {
     use serde_json::json;
     use tempfile::TempDir;
 
+    fn vc(dim: usize) -> VectorConfig {
+        VectorConfig {
+            dim,
+            distance: nocturnum_core::Distance::Dot,
+        }
+    }
+
     fn payload(v: serde_json::Value) -> Payload {
         serde_json::from_value(v).unwrap()
     }
@@ -472,7 +576,7 @@ mod tests {
             },
         ];
         let dest = root.join(segment_dir_name(id));
-        write_segment(&root.join("tmp"), &dest, id, 2, entries).unwrap();
+        write_segment(&root.join("tmp"), &dest, id, vc(2), None, entries).unwrap();
         dest
     }
 
@@ -481,7 +585,7 @@ mod tests {
         let root = TempDir::new().unwrap();
         let dir = build(root.path(), 5);
         assert!(!root.path().join("tmp").exists());
-        let seg = Segment::open(&dir, 5, 2).unwrap();
+        let seg = Segment::open(&dir, 5, vc(2)).unwrap();
         assert_eq!(seg.rows(), 2);
         assert_eq!(
             seg.entries(),
@@ -513,8 +617,8 @@ mod tests {
     fn an_empty_segment_works() {
         let root = TempDir::new().unwrap();
         let dest = root.path().join(segment_dir_name(1));
-        write_segment(&root.path().join("tmp"), &dest, 1, 3, []).unwrap();
-        let seg = Segment::open(&dest, 1, 3).unwrap();
+        write_segment(&root.path().join("tmp"), &dest, 1, vc(3), None, []).unwrap();
+        let seg = Segment::open(&dest, 1, vc(3)).unwrap();
         assert_eq!((seg.rows(), seg.entries().len()), (0, 0));
         assert!(seg.vectors().is_empty());
     }
@@ -535,9 +639,9 @@ mod tests {
             let mut meta = original.clone();
             meta[field] = value;
             fs::write(&path, serde_json::to_vec(&meta).unwrap()).unwrap();
-            assert!(Segment::open(&dir, 5, 2).is_err(), "{field}");
+            assert!(Segment::open(&dir, 5, vc(2)).is_err(), "{field}");
         }
-        let huge_dim = Segment::open(&dir, 5, usize::MAX);
+        let huge_dim = Segment::open(&dir, 5, vc(usize::MAX));
         assert!(huge_dim.is_err());
     }
 
@@ -552,12 +656,85 @@ mod tests {
                 let mut bytes = original.clone();
                 bytes[i] ^= 0x01;
                 fs::write(&path, &bytes).unwrap();
-                assert!(Segment::open(&dir, 5, 2).is_err(), "{name} byte {i}");
+                assert!(Segment::open(&dir, 5, vc(2)).is_err(), "{name} byte {i}");
             }
             fs::write(&path, &original).unwrap();
         }
-        assert!(Segment::open(&dir, 5, 2).is_ok());
-        assert!(Segment::open(&dir, 6, 2).is_err());
-        assert!(Segment::open(&dir, 5, 3).is_err());
+        assert!(Segment::open(&dir, 5, vc(2)).is_ok());
+        assert!(Segment::open(&dir, 6, vc(2)).is_err());
+        assert!(Segment::open(&dir, 5, vc(3)).is_err());
+    }
+
+    #[test]
+    fn big_enough_segments_get_a_checked_graph() {
+        let root = TempDir::new().unwrap();
+        let config = VectorConfig {
+            dim: 4,
+            distance: nocturnum_core::Distance::Euclid,
+        };
+        let vectors: Vec<Vec<f32>> = (0..300)
+            .map(|i| vec![i as f32, 0.0, 1.0, (i % 7) as f32])
+            .collect();
+        let p = payload(json!({}));
+        let entries = vectors.iter().enumerate().map(|(i, v)| EntryIn {
+            id: PointId::Num(i as u64),
+            version: 1,
+            value: Some((v.as_slice(), &p)),
+        });
+        let options = GraphOptions {
+            min_bytes: 0,
+            ..GraphOptions::default()
+        };
+        let dest = root.path().join(segment_dir_name(1));
+        write_segment(
+            &root.path().join("tmp"),
+            &dest,
+            1,
+            config,
+            Some(&options),
+            entries,
+        )
+        .unwrap();
+        let seg = Segment::open(&dest, 1, config).unwrap();
+        let g = seg.graph().expect("a graph was built");
+        let got = g
+            .search(seg.vectors(), &[42.2, 0.0, 1.0, 0.0], 1, 32, |_| {
+                Ok::<_, ()>(true)
+            })
+            .unwrap();
+        assert_eq!(got[0].key, 42);
+
+        // Too small for the threshold, no graph.
+        let small = GraphOptions::default();
+        let dest2 = root.path().join(segment_dir_name(2));
+        let few = vectors.iter().take(3).enumerate().map(|(i, v)| EntryIn {
+            id: PointId::Num(i as u64),
+            version: 1,
+            value: Some((v.as_slice(), &p)),
+        });
+        write_segment(
+            &root.path().join("tmp"),
+            &dest2,
+            2,
+            config,
+            Some(&small),
+            few,
+        )
+        .unwrap();
+        assert!(Segment::open(&dest2, 2, config).unwrap().graph().is_none());
+
+        // A damaged graph fails the segment, and a graph for another metric is refused.
+        let path = dest.join(GRAPH_FILE);
+        let original = fs::read(&path).unwrap();
+        let mut bad = original.clone();
+        bad[60] ^= 1;
+        fs::write(&path, &bad).unwrap();
+        assert!(Segment::open(&dest, 1, config).is_err());
+        fs::write(&path, &original).unwrap();
+        let dot = VectorConfig {
+            distance: nocturnum_core::Distance::Dot,
+            ..config
+        };
+        assert!(Segment::open(&dest, 1, dot).is_err());
     }
 }

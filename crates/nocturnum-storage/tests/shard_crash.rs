@@ -16,7 +16,9 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use nocturnum_core::{Ack, Distance, Payload, PointId, VectorConfig};
-use nocturnum_storage::{Operation, PointWrite, Record, Shard, ShardOptions, WalOptions};
+use nocturnum_storage::{
+    GraphOptions, Operation, PointWrite, Record, Shard, ShardOptions, WalOptions,
+};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -40,6 +42,11 @@ fn opts() -> ShardOptions {
         },
         flush_bytes: usize::MAX,
         background_sync: Duration::from_millis(20),
+        // Every flushed segment builds a graph, so graphs go through every path tested here.
+        graph: GraphOptions {
+            min_bytes: 0,
+            ..GraphOptions::default()
+        },
     }
 }
 

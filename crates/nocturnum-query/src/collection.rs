@@ -6,9 +6,10 @@
 //!
 //! # Reads
 //!
-//! - **Search** scores the memtable's points directly and each segment's live rows through a
-//!   filtered flat scan, see [`nocturnum_index::flat::search_filtered`], then merges the
-//!   per-segment results into one top `offset + limit`, ordered by score and then by id.
+//! - **Search** scores the memtable's points directly, and for each segment walks its graph
+//!   index or scans its candidate rows, as the planner chooses (see [`crate::plan`]), then
+//!   merges the per-segment results into one top `offset + limit`, ordered by score and then
+//!   by id. `exact` skips the graphs.
 //! - **Scroll** walks matching points in id order, resuming after the last id of the
 //!   previous page, so pages stay stable while points before the cursor change.
 //! - **Count** is exact, settling rows the payload indexes cannot by reading their payloads.
@@ -29,6 +30,8 @@ use std::path::Path;
 use nocturnum_core::payload::PathStep;
 use nocturnum_core::{Ack, Filter, JsonPath, Payload, PayloadIndexSpec, PointId, VectorConfig};
 use nocturnum_index::flat::search_filtered;
+
+use crate::plan::{PlanOptions, Strategy, choose};
 use nocturnum_index::{Bounds, TopK};
 use nocturnum_storage::{
     Operation, PointRef, PointWrite, SegmentView, Shard, ShardOptions, ShardRecovery, View,
@@ -39,6 +42,9 @@ use serde_json::{Map, Value};
 /// The most results one search can reach, counting `offset`, and the most points one scroll
 /// page holds, which bounds the memory a single request can take.
 pub const MAX_RESULT_WINDOW: usize = 10_000;
+
+/// The graph search beam width when a request gives none.
+pub const DEFAULT_HNSW_EF: usize = 128;
 
 #[derive(Debug, thiserror::Error)]
 pub enum QueryError {
@@ -113,8 +119,11 @@ pub struct SearchRequest {
     pub offset: usize,
     /// Drops results below this similarity, or above this distance for euclid and manhattan.
     pub score_threshold: Option<f32>,
-    /// Asks for exact results, which every search gives until segments carry a graph index.
+    /// Scans every candidate instead of walking segments' graphs, exact but slower.
     pub exact: bool,
+    /// The beam width for graph search, higher finds more of the true nearest points more
+    /// slowly, [`DEFAULT_HNSW_EF`] when not given and never below `offset + limit`.
+    pub hnsw_ef: Option<usize>,
     pub with_payload: WithPayload,
     pub with_vector: bool,
 }
@@ -129,6 +138,7 @@ impl SearchRequest {
             offset: 0,
             score_threshold: None,
             exact: false,
+            hnsw_ef: None,
             with_payload: WithPayload::None,
             with_vector: false,
         }
@@ -154,6 +164,7 @@ pub struct ScrollPage {
 
 pub struct Collection {
     shard: Shard,
+    plan: PlanOptions,
 }
 
 impl Collection {
@@ -164,7 +175,14 @@ impl Collection {
         create: Option<VectorConfig>,
     ) -> Result<(Collection, ShardRecovery)> {
         let (shard, recovery) = Shard::open(dir, options, create)?;
-        Ok((Collection { shard }, recovery))
+        let plan = PlanOptions::for_dim(shard.config().dim);
+        Ok((Collection { shard, plan }, recovery))
+    }
+
+    /// Replaces the planner's thresholds, which default to [`PlanOptions::for_dim`].
+    pub fn with_plan_options(mut self, plan: PlanOptions) -> Collection {
+        self.plan = plan;
+        self
     }
 
     pub fn config(&self) -> VectorConfig {
@@ -363,16 +381,38 @@ impl Collection {
                 top.push(p.id, score);
             }
         }
+        let ef = req.hnsw_ef.unwrap_or(DEFAULT_HNSW_EF).max(window);
         for seg in view.segments() {
             let bounds = segment_bounds(&seg, req.filter.as_ref());
             let check = |row| match &req.filter {
                 Some(f) => row_matches(&seg, f, row),
                 None => Ok(true),
             };
+            let vectors = seg.vectors();
+            let graph = seg.graph().filter(|_| !req.exact);
             // Rows are in id order within a segment, so ties cut inside it keep the same ids
             // the merge would.
-            let hits =
-                search_filtered(distance, seg.vectors(), dim, &query, window, &bounds, check)?;
+            let hits = match graph {
+                None => search_filtered(distance, vectors, dim, &query, window, &bounds, check)?,
+                Some(g) => {
+                    let plan = choose(bounds, &self.plan, check)?;
+                    let b = &plan.bounds;
+                    match plan.strategy {
+                        Strategy::Enumerate => {
+                            search_filtered(distance, vectors, dim, &query, window, b, check)?
+                        }
+                        Strategy::Graph => g.search(vectors, &query, window, ef, |row| {
+                            if b.sure.contains(row) {
+                                Ok(true)
+                            } else if b.maybe.contains(row) {
+                                check(row)
+                            } else {
+                                Ok(false)
+                            }
+                        })?,
+                    }
+                }
+            };
             for h in hits {
                 top.push(seg.point(h.key).id, h.score);
             }
