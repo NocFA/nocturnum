@@ -8,6 +8,8 @@ It follows the shape of [Qdrant](https://qdrant.tech/) (collections, points, pay
 
 The filter semantics are defined in `crates/nocturnum-core/src/filter.rs`, the WAL's on-disk format in `crates/nocturnum-storage/src/wal.rs`, and what each write acknowledgement promises, with the crash tests behind it, in [`docs/storage/durability.md`](docs/storage/durability.md).
 
+The REST API the server will expose is drafted in [`docs/api/v1.md`](docs/api/v1.md), waiting on review before the server is built.
+
 ## Why
 
 Qdrant's engine is open source, but the things that make it pleasant to run for real, scheduled backups, monitoring, automatic rebalancing and the managed console, live in its cloud.
