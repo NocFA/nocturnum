@@ -36,7 +36,7 @@ use crate::plan::{PlanOptions, Strategy, choose};
 use nocturnum_index::{Bounds, TopK};
 use nocturnum_storage::{
     Operation, Optimizer, OptimizerOptions, OptimizerStatus, PointRef, PointWrite, SegmentView,
-    Shard, ShardOptions, ShardRecovery, SnapshotInfo, View, WriteError,
+    Shard, ShardOptions, ShardRecovery, SnapshotInfo, View, WalStats, WriteError,
 };
 use serde_json::{Map, Value};
 
@@ -47,18 +47,27 @@ pub const MAX_RESULT_WINDOW: usize = 10_000;
 /// The graph search beam width when a request gives none.
 pub const DEFAULT_HNSW_EF: usize = 128;
 
+/// The widest graph search beam a request may ask for, since the beam's memory is taken up
+/// front.
+pub const MAX_HNSW_EF: usize = 65_536;
+
 #[derive(Debug, thiserror::Error)]
 pub enum QueryError {
     /// The request is malformed or breaks a limit, and nothing was done.
     #[error("invalid request: {0}")]
     Invalid(String),
+    /// A vector, payload, filter or path in the request failed validation, and nothing was
+    /// done.
+    #[error(transparent)]
+    Input(#[from] nocturnum_core::Error),
     #[error(transparent)]
     Storage(#[from] nocturnum_storage::Error),
 }
 
-impl From<nocturnum_core::Error> for QueryError {
-    fn from(e: nocturnum_core::Error) -> Self {
-        QueryError::Invalid(e.to_string())
+impl QueryError {
+    /// Whether the request was refused for what it asked, rather than failing in storage.
+    pub fn is_invalid(&self) -> bool {
+        matches!(self, QueryError::Invalid(_) | QueryError::Input(_))
     }
 }
 
@@ -233,6 +242,22 @@ impl Collection {
         self.shard.segment_ids().len()
     }
 
+    /// Why the collection has stopped taking writes, `None` while it is healthy, see
+    /// [`Shard::failure`].
+    pub fn failure(&self) -> Option<&'static str> {
+        self.shard.failure()
+    }
+
+    pub fn wal_stats(&self) -> WalStats {
+        self.shard.wal_stats()
+    }
+
+    /// Makes the WAL's next `n` fsyncs fail, for fault-injection tests.
+    #[doc(hidden)]
+    pub fn inject_sync_failures(&self, n: u64) {
+        self.shard.inject_sync_failures(n);
+    }
+
     pub fn upsert(&self, points: Vec<PointWrite>, ack: Ack) -> Result<u64> {
         Ok(self.shard.write(Operation::Upsert(points), ack)?)
     }
@@ -382,6 +407,13 @@ impl Collection {
         if window > MAX_RESULT_WINDOW {
             return Err(QueryError::Invalid(format!(
                 "offset plus limit may be at most {MAX_RESULT_WINDOW}, got {window}"
+            )));
+        }
+        if let Some(ef) = req.hnsw_ef
+            && !(1..=MAX_HNSW_EF).contains(&ef)
+        {
+            return Err(QueryError::Invalid(format!(
+                "hnsw_ef must be between 1 and {MAX_HNSW_EF}, got {ef}"
             )));
         }
         check_projection(&req.with_payload)?;

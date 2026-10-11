@@ -341,6 +341,15 @@ pub struct Shard {
     _sync: PeriodicSync,
 }
 
+/// What [`Shard::wal_stats`] reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WalStats {
+    pub disk_bytes: u64,
+    pub last_seq: u64,
+    pub syncs: u64,
+    pub sync_time: Duration,
+}
+
 /// What [`Shard::open`] found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShardRecovery {
@@ -702,6 +711,34 @@ impl Shard {
         self.wal.sync_all()
     }
 
+    /// Why the shard has stopped taking writes or flushes, `None` while it is healthy. Only a
+    /// restart, which recovers from what is on disk, clears it.
+    pub fn failure(&self) -> Option<&'static str> {
+        if self.wal.is_poisoned() {
+            Some("the wal stopped accepting writes after a write or fsync failed")
+        } else if self.flush_broken.load(Ordering::Acquire) {
+            Some("a manifest write failed, so segments can no longer be published")
+        } else {
+            None
+        }
+    }
+
+    /// Makes the WAL's next `n` fsyncs fail, for fault-injection tests.
+    #[doc(hidden)]
+    pub fn inject_sync_failures(&self, n: u64) {
+        self.wal.inject_sync_failures(n);
+    }
+
+    /// Counters from the shard's WAL, for metrics.
+    pub fn wal_stats(&self) -> WalStats {
+        WalStats {
+            disk_bytes: self.wal.disk_bytes(),
+            last_seq: self.wal.last_seq(),
+            syncs: self.wal.sync_count(),
+            sync_time: self.wal.sync_time(),
+        }
+    }
+
     /// The payload indexes every segment builds.
     pub fn payload_indexes(&self) -> Vec<PayloadIndexSpec> {
         read(&self.state).payload_indexes.clone()
@@ -943,7 +980,9 @@ mod merge;
 mod snapshot;
 
 pub use merge::{Job, OptimizerOptions, OptimizerStatus};
-pub use snapshot::{Pruned, SnapshotInfo, prune, restore, snapshot_name};
+pub use snapshot::{
+    Pruned, SnapshotInfo, prune, remove_snapshot, restore, snapshot_checksum, snapshot_name,
+};
 
 #[cfg(test)]
 mod tests;

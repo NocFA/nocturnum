@@ -154,6 +154,8 @@ pub struct Wal {
     truncation: Mutex<()>,
     poisoned: AtomicBool,
     syncs: AtomicU64,
+    /// Time spent in fsync, in nanoseconds.
+    sync_nanos: AtomicU64,
     fail_syncs: AtomicU64,
     /// Holds the exclusive lock on the directory for as long as the log is open.
     _lock: File,
@@ -568,6 +570,7 @@ impl Wal {
             truncation: Mutex::new(()),
             poisoned: AtomicBool::new(false),
             syncs: AtomicU64::new(0),
+            sync_nanos: AtomicU64::new(0),
             fail_syncs: AtomicU64::new(0),
             _lock: lock_file,
         };
@@ -601,7 +604,11 @@ impl Wal {
             Err(std::io::Error::other("injected fsync failure"))
         } else {
             self.syncs.fetch_add(1, Ordering::Relaxed);
-            sync_file(file)
+            let started = std::time::Instant::now();
+            let r = sync_file(file);
+            let nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+            self.sync_nanos.fetch_add(nanos, Ordering::Relaxed);
+            r
         };
         match result {
             Ok(()) => {
@@ -731,6 +738,25 @@ impl Wal {
     /// How many fsyncs the log has issued, which shows group commit at work.
     pub fn sync_count(&self) -> u64 {
         self.syncs.load(Ordering::Relaxed)
+    }
+
+    /// The total time fsyncs have taken.
+    pub fn sync_time(&self) -> std::time::Duration {
+        std::time::Duration::from_nanos(self.sync_nanos.load(Ordering::Relaxed))
+    }
+
+    /// The bytes the log takes on disk, counting closed segments not yet truncated.
+    pub fn disk_bytes(&self) -> u64 {
+        let (current, closed) = {
+            let w = lock(&self.writer);
+            let closed: Vec<PathBuf> = w.closed.iter().map(|c| c.1.clone()).collect();
+            (w.current.len, closed)
+        };
+        // A closed segment truncated since the list was taken has no size left to count.
+        closed
+            .iter()
+            .filter_map(|p| fs::metadata(p).ok())
+            .fold(current, |sum, m| sum + m.len())
     }
 
     pub fn is_poisoned(&self) -> bool {

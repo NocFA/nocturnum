@@ -358,10 +358,12 @@ fn a_failed_manifest_write_stops_flushing_until_restart() {
     let set_mode = |mode| {
         fs::set_permissions(dir.path(), fs::Permissions::from_mode(mode)).unwrap();
     };
+    assert_eq!(shard.failure(), None);
     set_mode(0o555);
     let failed = shard.flush();
     set_mode(0o755);
     assert!(failed.is_err());
+    assert!(shard.failure().is_some());
     // No retry is allowed to guess what reached the disk.
     assert!(matches!(shard.flush(), Err(Error::Invalid(_))));
     // Writes still land safely in the WAL.
@@ -370,7 +372,25 @@ fn a_failed_manifest_write_stops_flushing_until_restart() {
     drop(shard);
     let shard = reopen(dir.path());
     assert_eq!(contents(&shard), before);
+    assert_eq!(shard.failure(), None);
     assert!(shard.flush().unwrap());
+}
+
+#[test]
+fn a_failed_fsync_is_reported_until_restart() {
+    let dir = TempDir::new().unwrap();
+    let shard = create(dir.path());
+    upsert(&shard, vec![point(1, 0.0, json!({}))]);
+    let stats = shard.wal_stats();
+    assert!(stats.syncs >= 1 && stats.sync_time > Duration::ZERO);
+    assert!(stats.disk_bytes > 0 && stats.last_seq == 1);
+    shard.inject_sync_failures(1);
+    let failed = shard.write(Operation::Delete(vec![PointId::Num(1)]), Ack::Durable);
+    assert!(failed.is_err());
+    assert!(shard.failure().is_some());
+    drop(shard);
+    let shard = reopen(dir.path());
+    assert_eq!(shard.failure(), None);
 }
 
 #[test]
@@ -877,6 +897,40 @@ fn a_snapshot_during_writes_is_a_prefix_of_history() {
         k >= before,
         "the snapshot holds {k} writes, {before} were acknowledged before it"
     );
+}
+
+#[test]
+fn truncated_archives_with_matching_checksums_are_corrupt() {
+    use sha2::Digest;
+    let dir = TempDir::new().unwrap();
+    let snaps = snapshot_dir();
+    let shard = create(dir.path());
+    upsert(
+        &shard,
+        vec![point(1, 1.0, json!({"pad": "x".repeat(3000)}))],
+    );
+    let path = snaps.path().join("a.snapshot");
+    shard.snapshot(&path).unwrap();
+    let original = fs::read(&path).unwrap();
+    // Cuts inside a header, inside file data and at the end of the last entry's data.
+    for cut in [100, 700, 2000, original.len() - 1024 - 10] {
+        let bytes = &original[..cut];
+        let short = snaps.path().join(format!("cut-{cut}.snapshot"));
+        fs::write(&short, bytes).unwrap();
+        let sum: String = sha2::Sha256::digest(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let sidecar = snaps.path().join(format!("cut-{cut}.snapshot.sha256"));
+        fs::write(sidecar, format!("{sum}\n")).unwrap();
+        let target = snaps.path().join(format!("restored-{cut}"));
+        let got = restore(&short, &target);
+        assert!(
+            matches!(got, Err(Error::Corrupt { .. })),
+            "cut at {cut}: {got:?}"
+        );
+        assert!(!target.exists());
+    }
 }
 
 #[test]

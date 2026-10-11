@@ -108,6 +108,18 @@ The staged shard is opened, which runs full recovery and checks every segment, b
 
 The whole workspace suite, these tests included, also passed on an x86 Linux machine (ext4) on 2026-10-11, where the sparse-file test can actually fail, since the tar crate only looks for holes on Linux and FreeBSD, and does fail with sparse output switched back on.
 
+## Through the server
+
+The REST server passes `?ack=` straight to the collection, so a `durable` response means the WAL record was fsynced, and it never answers a write with success after a failed fsync.
+
+Once a collection's WAL is poisoned its writes get `503 unavailable`, which `a_failed_fsync_makes_the_server_unready` in `crates/nocturnum-api/tests/http.rs` checks with an injected fsync failure, and `a_failed_fsync_is_reported_until_restart` at the shard.
+
+Once a manifest write has failed, writes still land safely in the WAL, while flushing, index changes and snapshots get `503`, since nothing can tell which manifest reached the disk, and `a_failed_manifest_write_stops_flushing_but_not_writes` checks that over HTTP.
+
+Either way `/readyz` answers `503` naming the collection and `nocturnum_collection_failed` turns to 1, until a restart recovers from what is on disk.
+
+Creating, deleting and restoring a collection rename whole directories into place, see [`docs/server/config.md`](../server/config.md).
+
 ## Unit tests
 
 `crates/nocturnum-storage/src/wal/tests.rs` covers what a crash test reaches only by chance in the WAL:

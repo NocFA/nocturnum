@@ -319,7 +319,7 @@ fn payload_selection_includes_and_excludes_paths() {
         &WithPayload::Include(paths(&["e[0]"])),
         false,
     );
-    assert!(matches!(bad, Err(QueryError::Invalid(_))));
+    assert!(matches!(bad, Err(ref e) if e.is_invalid()));
 }
 
 #[test]
@@ -356,11 +356,24 @@ fn requests_out_of_bounds_are_refused() {
     let c = create(dir.path(), Distance::Cosine);
     let mut req = SearchRequest::new(vec![1.0, 0.0], MAX_RESULT_WINDOW);
     req.offset = 1;
-    assert!(matches!(c.search(&req), Err(QueryError::Invalid(_))));
+    assert!(matches!(c.search(&req), Err(ref e) if e.is_invalid()));
     // A zero vector has no direction to compare by cosine.
     let req = SearchRequest::new(vec![0.0, 0.0], 1);
-    assert!(matches!(c.search(&req), Err(QueryError::Invalid(_))));
+    assert!(matches!(
+        c.search(&req),
+        Err(QueryError::Input(nocturnum_core::Error::ZeroVector))
+    ));
     let req = SearchRequest::new(vec![1.0], 1);
+    assert!(matches!(
+        c.search(&req),
+        Err(QueryError::Input(
+            nocturnum_core::Error::DimensionMismatch { .. }
+        ))
+    ));
+    let mut req = SearchRequest::new(vec![1.0, 0.0], 1);
+    req.hnsw_ef = Some(MAX_HNSW_EF + 1);
+    assert!(matches!(c.search(&req), Err(QueryError::Invalid(_))));
+    req.hnsw_ef = Some(0);
     assert!(matches!(c.search(&req), Err(QueryError::Invalid(_))));
     let scroll = ScrollRequest {
         filter: None,
@@ -369,11 +382,13 @@ fn requests_out_of_bounds_are_refused() {
         with_payload: WithPayload::None,
         with_vector: false,
     };
-    assert!(matches!(c.scroll(&scroll), Err(QueryError::Invalid(_))));
+    assert!(matches!(c.scroll(&scroll), Err(ref e) if e.is_invalid()));
     let bad_filter = filter(json!({"must": [{"key": "a", "any": []}]}));
     assert!(matches!(
         c.count(Some(&bad_filter)),
-        Err(QueryError::Invalid(_))
+        Err(QueryError::Input(
+            nocturnum_core::Error::InvalidFilter { .. }
+        ))
     ));
 }
 
@@ -421,11 +436,16 @@ fn search_walks_segment_graphs_when_the_planner_says_so() {
     c.create_payload_index(spec("half", PayloadIndexKind::Bool))
         .unwrap();
 
+    assert!(
+        c.shard.view().segments().all(|s| s.graph().is_some()),
+        "every segment has a graph"
+    );
+
     let half = filter(json!({"must": [{"key": "half", "match": true}]}));
     for f in [None, Some(half)] {
-        let mut recall = |ef: usize| {
+        let mut recall = |ef: usize, queries: usize| {
             let mut hits = 0;
-            for _ in 0..30 {
+            for _ in 0..queries {
                 let mut req = SearchRequest::new((0..16).map(|_| next()).collect(), 10);
                 req.filter = f.clone();
                 req.exact = true;
@@ -441,9 +461,11 @@ fn search_walks_segment_graphs_when_the_planner_says_so() {
                 }
                 hits += got.iter().filter(|s| exact.contains(&s.id)).count();
             }
-            hits as f64 / 300.0
+            hits as f64 / (queries * 10) as f64
         };
-        let (low, high) = (recall(10), recall(128));
+        // Graph builds run in parallel, so the graphs differ between runs, and a narrow beam
+        // over a few hundred results has come back perfect once.
+        let (low, high) = (recall(10, 100), recall(128, 30));
         assert!(
             low < 1.0,
             "a beam of 10 found everything, so the graphs were not used"

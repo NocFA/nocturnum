@@ -4,11 +4,11 @@ nocturnum is a vector database written in Rust, for storing embeddings with JSON
 
 It follows the shape of [Qdrant](https://qdrant.tech/) (collections, points, payload filters, HNSW, a write-ahead log and segments), written from scratch, with everything a self-hoster needs in the open project and the web console built into the same binary.
 
-**Status:** early engine work, with the core types, the filter language and crash-tested storage (a write-ahead log, a memtable and immutable segments under a manifest, merged and vacuumed in the background, with snapshots), exact and HNSW vector search, payload indexes for filters and a collection layer for writes, search, scroll and count written, and nothing to run yet beyond `cargo run` printing the version, since the HTTP server comes next.
+**Status:** the engine and the REST server run, with crash-tested storage (a write-ahead log, a memtable and immutable segments under a manifest, merged and vacuumed in the background, with snapshots), exact and HNSW vector search, payload indexes for filters, API keys and Prometheus metrics, while the web console and gRPC come next.
 
 The filter semantics are defined in `crates/nocturnum-core/src/filter.rs`, the WAL's on-disk format in `crates/nocturnum-storage/src/wal.rs`, and what each write acknowledgement promises, with the crash tests behind it, in [`docs/storage/durability.md`](docs/storage/durability.md).
 
-The REST API the server will expose is drafted in [`docs/api/v1.md`](docs/api/v1.md), waiting on review before the server is built.
+The REST API is specified in [`docs/api/v1.md`](docs/api/v1.md), and running and configuring the server in [`docs/server/config.md`](docs/server/config.md).
 
 ## Why
 
@@ -27,12 +27,25 @@ nocturnum aims to be the whole thing in one place, sized for homelab hardware fi
 | `nocturnum-api` | REST and gRPC adapters over one operation layer |
 | `nocturnum-server` | the `nocturnum` binary, with the console embedded |
 
-## Building
+## Running
 
 ```bash
-cargo check --workspace
-cargo run -p nocturnum-server
+cargo run --release -p nocturnum-server -- --data ./data
 ```
+
+```bash
+curl -s -X PUT localhost:6333/v1/collections/notes \
+  -H 'Content-Type: application/json' \
+  -d '{"vectors": {"dim": 3, "distance": "cosine"}}'
+curl -s -X PUT localhost:6333/v1/collections/notes/points \
+  -H 'Content-Type: application/json' \
+  -d '{"points": [{"id": 1, "vector": [0.1, 0.9, 0.2], "payload": {"tags": ["red"]}}]}'
+curl -s -X POST localhost:6333/v1/collections/notes/points/search \
+  -H 'Content-Type: application/json' \
+  -d '{"vector": [0.1, 0.8, 0.3], "limit": 5}'
+```
+
+`cargo test --workspace` runs every test, including the crash tests and the HTTP tests.
 
 ## Scope
 

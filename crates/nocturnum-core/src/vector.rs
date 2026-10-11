@@ -30,6 +30,16 @@ impl Distance {
     /// Checks a vector for this metric and returns the form the engine stores and scores,
     /// which for cosine is the unit-length copy.
     pub fn prepare(self, dim: usize, mut vector: DenseVector) -> Result<DenseVector> {
+        if let Some(norm) = self.check(dim, &vector)? {
+            vector.iter_mut().for_each(|x| *x /= norm);
+        }
+        Ok(vector)
+    }
+
+    /// Checks a vector for this metric without preparing it, which lets a caller report
+    /// which of many vectors is wrong before any of them is changed. For cosine it returns
+    /// the norm [`Distance::prepare`] divides by.
+    pub fn check(self, dim: usize, vector: &[f32]) -> Result<Option<f32>> {
         if vector.len() != dim {
             return Err(Error::DimensionMismatch {
                 expected: dim,
@@ -39,14 +49,14 @@ impl Distance {
         if let Some(index) = vector.iter().position(|x| !x.is_finite()) {
             return Err(Error::NonFiniteVector { index });
         }
-        if self == Distance::Cosine {
-            let norm = dot(&vector, &vector).sqrt();
-            if norm == 0.0 || !norm.is_finite() {
-                return Err(Error::ZeroVector);
-            }
-            vector.iter_mut().for_each(|x| *x /= norm);
+        if self != Distance::Cosine {
+            return Ok(None);
         }
-        Ok(vector)
+        let norm = dot(vector, vector).sqrt();
+        if norm == 0.0 || !norm.is_finite() {
+            return Err(Error::ZeroVector);
+        }
+        Ok(Some(norm))
     }
 
     /// Scores two prepared vectors of equal length, higher is better.

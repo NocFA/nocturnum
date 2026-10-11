@@ -230,6 +230,45 @@ fn expected_sha256(path: &Path) -> Result<String> {
     Ok(sum.to_ascii_lowercase())
 }
 
+/// The SHA-256 recorded in the sidecar of the snapshot at `path`, as lowercase hex, without
+/// reading the snapshot itself.
+pub fn snapshot_checksum(path: &Path) -> Result<String> {
+    expected_sha256(path)
+}
+
+/// Deletes a snapshot and its sidecar, the sidecar first, so a snapshot left without one by a
+/// crash part way is no longer listed, the same order [`prune`] uses.
+pub fn remove_snapshot(path: &Path) -> Result<()> {
+    fs::remove_file(sidecar(path)).ctx(|| format!("removing {}", path.display()))?;
+    fs::remove_file(path).ctx(|| format!("removing {}", path.display()))?;
+    let dir = parent_of(path);
+    sync_dir(dir).ctx(|| format!("syncing {}", dir.display()))
+}
+
+enum CopyError {
+    Read(io::Error),
+    Write(Error),
+}
+
+/// Copies an archive entry into a file and returns the bytes copied, telling a failed read,
+/// which means a damaged archive, from a failed write.
+fn copy_entry(from: &mut impl Read, to: &mut File, out: &Path) -> Result<u64, CopyError> {
+    let mut buf = vec![0; 1 << 16];
+    let mut copied = 0;
+    loop {
+        let n = match from.read(&mut buf) {
+            Ok(0) => return Ok(copied),
+            Ok(n) => n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(CopyError::Read(e)),
+        };
+        to.write_all(&buf[..n])
+            .ctx(|| format!("writing {}", out.display()))
+            .map_err(CopyError::Write)?;
+        copied += n as u64;
+    }
+}
+
 /// Whether the snapshot at `path` matches its sidecar.
 fn verify(path: &Path) -> Result<bool> {
     let expected = expected_sha256(path)?;
@@ -413,11 +452,12 @@ fn unpack(path: &Path, tmp: &Path, dir: &Path) -> Result<()> {
     let mut dirs = BTreeSet::new();
     // Raw entries keep long-name and extension records as entries of their own, which are
     // refused below, instead of buffering them whole.
-    let entries = archive
-        .entries()
-        .ctx(|| format!("reading {}", path.display()))?;
+    // The whole file was just read once to hash it, so a failure reading the archive now
+    // means it is malformed, while failures writing the files out are the disk's.
+    let damaged = |e: io::Error| corrupt(format!("the archive is damaged: {e}"));
+    let entries = archive.entries().map_err(damaged)?;
     for entry in entries.raw(true) {
-        let mut entry = entry.ctx(|| format!("reading {}", path.display()))?;
+        let mut entry = entry.map_err(damaged)?;
         if entry.header().entry_type() != tar::EntryType::Regular {
             return Err(corrupt(
                 "the snapshot holds something other than files".into(),
@@ -425,7 +465,7 @@ fn unpack(path: &Path, tmp: &Path, dir: &Path) -> Result<()> {
         }
         let name = entry
             .path()
-            .ctx(|| format!("reading {}", path.display()))?
+            .map_err(damaged)?
             .to_string_lossy()
             .into_owned();
         let target = allowed(&name).ok_or_else(|| corrupt(format!("unexpected file {name}")))?;
@@ -434,7 +474,7 @@ fn unpack(path: &Path, tmp: &Path, dir: &Path) -> Result<()> {
             (&mut entry)
                 .take(MAX_INFO_BYTES)
                 .read_to_end(&mut bytes)
-                .ctx(|| format!("reading {name} from {}", path.display()))?;
+                .map_err(damaged)?;
             let i: Info = serde_json::from_slice(&bytes)
                 .map_err(|e| corrupt(format!("{INFO_FILE} does not parse: {e}")))?;
             if i.format != FORMAT {
@@ -460,11 +500,20 @@ fn unpack(path: &Path, tmp: &Path, dir: &Path) -> Result<()> {
             .create_new(true)
             .open(&out)
             .ctx(|| format!("creating {}", out.display()))?;
-        io::copy(&mut entry, &mut f).ctx(|| format!("writing {}", out.display()))?;
+        let size = entry.header().size().map_err(damaged)?;
+        let copied = copy_entry(&mut entry, &mut f, &out).map_err(|e| match e {
+            CopyError::Read(e) => damaged(e),
+            CopyError::Write(e) => e,
+        })?;
+        if copied != size {
+            return Err(corrupt(format!(
+                "{name} holds {copied} of its {size} bytes, the archive ends early"
+            )));
+        }
         sync_file(&f).ctx(|| format!("syncing {}", out.display()))?;
     }
     let mut rest = archive.into_inner();
-    io::copy(&mut rest, &mut io::sink()).ctx(|| format!("reading {}", path.display()))?;
+    io::copy(&mut rest, &mut io::sink()).map_err(damaged)?;
     if hex(&rest.hash.finalize()) != expected {
         return Err(corrupt("the snapshot changed while it was restored".into()));
     }

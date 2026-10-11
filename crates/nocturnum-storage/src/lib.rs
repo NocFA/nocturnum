@@ -16,6 +16,7 @@ pub use optimizer::Optimizer;
 pub use segment::GraphOptions;
 pub use shard::{
     Job, OptimizerOptions, OptimizerStatus, PointRef, Record, SegmentView, Shard, ShardOptions,
-    ShardRecovery, SnapshotInfo, View, WriteError,
+    ShardRecovery, SnapshotInfo, View, WalStats, WriteError,
 };
+pub use sync::sync_dir;
 pub use wal::{Recovery, Wal, WalOptions};

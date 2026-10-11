@@ -38,8 +38,9 @@ pub(crate) fn sync_file(file: &File) -> io::Result<()> {
     }
 }
 
-/// Makes the creation, removal or renaming of entries in `dir` durable.
-pub(crate) fn sync_dir(dir: &Path) -> io::Result<()> {
+/// Makes the creation, removal or renaming of entries in `dir` durable, with `F_FULLFSYNC`
+/// on macOS.
+pub fn sync_dir(dir: &Path) -> io::Result<()> {
     sync_file(&File::open(dir)?)
 }
 
