@@ -72,10 +72,26 @@ pub enum PathStep {
 /// Paths never descend into arrays on their own, so `items.price` reaches nothing when
 /// `items` is an array, and `items[].price` is the way to address each element. Filters
 /// then treat an array at the end of a path as its elements, see [`crate::filter`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct JsonPath {
     steps: Vec<PathStep>,
     text: String,
+}
+
+// Paths are equal when they address the same values, so `a` and `"a"` or `x[0]` and `x[00]`
+// are one path, which lets an index on one spelling serve a filter written with another.
+impl PartialEq for JsonPath {
+    fn eq(&self, other: &Self) -> bool {
+        self.steps == other.steps
+    }
+}
+
+impl Eq for JsonPath {}
+
+impl std::hash::Hash for JsonPath {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.steps.hash(state);
+    }
 }
 
 impl JsonPath {
@@ -230,6 +246,16 @@ mod tests {
             path("\"a.b\".c").steps(),
             &[PathStep::Key("a.b".into()), PathStep::Key("c".into())]
         );
+    }
+
+    #[test]
+    fn spellings_of_one_path_are_equal() {
+        let p = |s: &str| s.parse::<JsonPath>().unwrap();
+        assert_eq!(p("a"), p("\"a\""));
+        assert_eq!(p("x[0].y"), p("x[00].\"y\""));
+        assert_ne!(p("a.b"), p("\"a.b\""));
+        let set: std::collections::HashSet<_> = [p("a"), p("\"a\"")].into();
+        assert_eq!(set.len(), 1);
     }
 
     #[test]

@@ -26,6 +26,7 @@ bytemuck = "1.25"
 memmap2 = "0.9"
 libc = "0.2"
 proptest = "1.11"
+roaring = "0.11"
 tempfile = "3.27"
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 

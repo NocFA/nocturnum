@@ -19,6 +19,8 @@ use std::collections::BinaryHeap;
 
 use nocturnum_core::Distance;
 
+use crate::payload::Bounds;
+
 /// A key with its score.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Scored<K> {
@@ -90,21 +92,34 @@ impl<K: Ord> TopK<K> {
         }
     }
 
+    /// Whether [`TopK::push`] would keep this result, which lets a caller skip expensive
+    /// checks on results that would be dropped anyway.
     #[inline]
-    pub fn push(&mut self, key: K, score: f32) {
+    pub fn would_keep(&self, key: &K, score: f32) -> bool {
         let score = rank(score);
         if self.k == 0 {
+            return false;
+        }
+        if self.heap.len() < self.k {
+            return true;
+        }
+        let worst = &self.heap.peek().expect("k is above zero").0;
+        score > worst.score || (score == worst.score && *key < worst.key)
+    }
+
+    #[inline]
+    pub fn push(&mut self, key: K, score: f32) {
+        // Most candidates in a large scan lose here, before touching the heap.
+        if !self.would_keep(&key, score) {
             return;
         }
         if self.heap.len() == self.k {
-            let worst = &self.heap.peek().expect("k is above zero").0;
-            // Most candidates in a large scan lose here, before touching the heap.
-            if score < worst.score || (score == worst.score && key >= worst.key) {
-                return;
-            }
             self.heap.pop();
         }
-        self.heap.push(Worst(Scored { key, score }));
+        self.heap.push(Worst(Scored {
+            key,
+            score: rank(score),
+        }));
     }
 
     pub fn len(&self) -> usize {
@@ -176,6 +191,36 @@ pub fn search<'a, K: Ord>(
         top.push(key, distance.score(query, v));
     }
     top.into_sorted_vec()
+}
+
+/// Like [`search_rows`] over the rows a filter may match, where rows outside `bounds.sure`
+/// are only kept if `check` says they match, and `check` is only asked about rows that score
+/// well enough to enter the top `k`, so most uncertain rows never have their payload read.
+///
+/// Callers restrict `bounds` to the live rows first, see [`Bounds::restrict`].
+pub fn search_filtered<E>(
+    distance: Distance,
+    vectors: &[f32],
+    dim: usize,
+    query: &[f32],
+    k: usize,
+    bounds: &Bounds,
+    mut check: impl FnMut(u32) -> Result<bool, E>,
+) -> Result<Vec<Scored<u32>>, E> {
+    assert_eq!(query.len(), dim, "the query has the wrong dimension");
+    assert!(dim > 0, "vectors have at least one dimension");
+    let mut top = TopK::new(k);
+    if k == 0 {
+        return Ok(Vec::new());
+    }
+    for row in &bounds.maybe {
+        let start = row as usize * dim;
+        let score = distance.score(query, &vectors[start..start + dim]);
+        if top.would_keep(&row, score) && (bounds.sure.contains(row) || check(row)?) {
+            top.push(row, score);
+        }
+    }
+    Ok(top.into_sorted_vec())
 }
 
 #[cfg(test)]

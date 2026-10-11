@@ -15,3 +15,7 @@ workspace = true
 nocturnum-core.workspace = true
 nocturnum-index.workspace = true
 nocturnum-storage.workspace = true
+roaring.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

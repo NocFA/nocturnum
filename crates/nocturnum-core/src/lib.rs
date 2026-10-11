@@ -9,7 +9,7 @@ pub mod payload;
 pub mod vector;
 
 pub use ack::Ack;
-pub use config::VectorConfig;
+pub use config::{PayloadIndexKind, VectorConfig};
 pub use error::{Error, Result};
 pub use filter::{Condition, FieldCondition, Filter, MatchValue, Range};
 pub use id::PointId;

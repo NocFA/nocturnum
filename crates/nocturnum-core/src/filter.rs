@@ -360,6 +360,22 @@ impl Condition {
     }
 }
 
+/// The values a field condition on `path` checks: whatever the path reaches, with an array at
+/// the end replaced by its elements, one level deep.
+///
+/// Payload indexes take their values from here too, so an index and the evaluator always see
+/// the same values.
+pub fn field_values<'a>(path: &JsonPath, root: &'a Map<String, Value>) -> Vec<&'a Value> {
+    let mut values = Vec::new();
+    for v in path.resolve_in(root) {
+        match v {
+            Value::Array(items) => values.extend(items.iter()),
+            other => values.push(other),
+        }
+    }
+    values
+}
+
 impl FieldCondition {
     fn validate(&self) -> std::result::Result<(), String> {
         let FieldCondition {
@@ -405,13 +421,7 @@ impl FieldCondition {
     }
 
     fn eval(&self, root: &Map<String, Value>) -> bool {
-        let mut values: Vec<&Value> = Vec::new();
-        for v in self.key.resolve_in(root) {
-            match v {
-                Value::Array(items) => values.extend(items.iter()),
-                other => values.push(other),
-            }
-        }
+        let values = field_values(&self.key, root);
         let non_null = || values.iter().filter(|v| !v.is_null());
 
         self.match_value

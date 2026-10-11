@@ -13,6 +13,8 @@ workspace = true
 
 [dependencies]
 nocturnum-core.workspace = true
+roaring.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

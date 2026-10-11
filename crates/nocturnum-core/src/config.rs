@@ -26,6 +26,20 @@ impl VectorConfig {
     }
 }
 
+/// A kind of payload index, opted into per field, see `nocturnum_index::payload`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PayloadIndexKind {
+    /// Strings, for `match`, `any` and `except` on strings.
+    Keyword,
+    /// Whole numbers, for `match`, `any` and `except` on integers and for `range`.
+    Integer,
+    /// Any numbers, for `range`.
+    Float,
+    /// Booleans, for `match`, `any` and `except` on booleans.
+    Bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
