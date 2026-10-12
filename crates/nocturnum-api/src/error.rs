@@ -34,6 +34,15 @@ impl ApiError {
         self
     }
 
+    /// Points the error inside `prefix`, such as `prefetch[1]`, keeping where inside it.
+    pub fn within(mut self, prefix: &str) -> ApiError {
+        self.at = Some(match self.at {
+            Some(at) => format!("{prefix}.{at}"),
+            None => prefix.to_owned(),
+        });
+        self
+    }
+
     pub fn invalid(message: impl Into<String>) -> ApiError {
         ApiError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
     }
@@ -62,6 +71,10 @@ impl ApiError {
     pub fn from_query(collection: &Collection, error: QueryError) -> ApiError {
         match error {
             QueryError::Invalid(message) => ApiError::invalid(message),
+            QueryError::Field { at, message } => ApiError::invalid(message).at(at),
+            QueryError::Prefetch(i, e) => {
+                ApiError::from_query(collection, *e).within(&format!("prefetch[{i}]"))
+            }
             e @ (QueryError::NoTextIndex(_) | QueryError::TooManyWords) => {
                 ApiError::invalid(e.to_string())
             }

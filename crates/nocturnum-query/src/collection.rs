@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use nocturnum_core::payload::PathStep;
 use nocturnum_core::{
-    Ack, Distance, Filter, JsonPath, Payload, PayloadIndexSpec, PointId, VectorConfig,
+    Ack, Condition, Distance, Filter, JsonPath, Payload, PayloadIndexSpec, PointId, VectorConfig,
 };
 use nocturnum_index::flat::search_filtered;
 
@@ -39,6 +39,7 @@ pub use recall::{
     RecallRequest, RecallRun,
 };
 
+use crate::fusion::{Fusion, check_weight};
 use crate::plan::{PlanOptions, Strategy, choose};
 use nocturnum_index::{Bm25, Bounds, Scored, TopK};
 use nocturnum_storage::{
@@ -69,12 +70,18 @@ pub enum QueryError {
     Input(#[from] nocturnum_core::Error),
     #[error(transparent)]
     Storage(#[from] nocturnum_storage::Error),
+    /// One field of the request is out of range, `at` naming it, such as `limit`.
+    #[error("{message}")]
+    Field { at: String, message: String },
     /// A text search named a field without a text index.
     #[error("{0} has no text index, create one with kind text to search it")]
     NoTextIndex(JsonPath),
     /// A text query has more than [`MAX_QUERY_TERMS`] different words.
     #[error("a text query may have at most {MAX_QUERY_TERMS} different words")]
     TooManyWords,
+    /// One of a fused query's prefetches failed, the first number being its place in the list.
+    #[error("prefetch {0}: {1}")]
+    Prefetch(usize, Box<QueryError>),
     /// The work ran out of the time it is allowed, and nothing was changed.
     #[error("{0}")]
     TimedOut(String),
@@ -86,10 +93,20 @@ impl QueryError {
         matches!(
             self,
             QueryError::Invalid(_)
+                | QueryError::Field { .. }
                 | QueryError::Input(_)
                 | QueryError::NoTextIndex(_)
                 | QueryError::TooManyWords
-        )
+        ) || matches!(self, QueryError::Prefetch(_, e) if e.is_invalid())
+    }
+}
+
+impl QueryError {
+    fn field(at: &str, message: impl Into<String>) -> QueryError {
+        QueryError::Field {
+            at: at.to_owned(),
+            message: message.into(),
+        }
     }
 }
 
@@ -201,6 +218,70 @@ impl SearchRequest {
             with_vector: false,
         }
     }
+}
+
+/// The most prefetches one fused query may run.
+pub const MAX_PREFETCH: usize = 16;
+
+/// One search feeding a fused query.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Prefetch {
+    pub query: Query,
+    /// Applied together with the fused query's own filter.
+    pub filter: Option<Filter>,
+    /// How many of its best points it hands to fusion, the fused query's `offset + limit`
+    /// when not given.
+    pub limit: Option<usize>,
+    pub score_threshold: Option<f32>,
+    pub exact: bool,
+    pub hnsw_ef: Option<usize>,
+    /// How much its ranking counts in the fusion, from 0 up, 1 by default.
+    pub weight: f64,
+}
+
+impl Prefetch {
+    pub fn new(query: Query) -> Prefetch {
+        Prefetch {
+            query,
+            filter: None,
+            limit: None,
+            score_threshold: None,
+            exact: false,
+            hnsw_ef: None,
+            weight: 1.0,
+        }
+    }
+}
+
+/// A query fusing the results of several searches into one ranking, see [`crate::fusion`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct FusedRequest {
+    pub prefetch: Vec<Prefetch>,
+    pub fusion: Fusion,
+    /// Applied to every prefetch.
+    pub filter: Option<Filter>,
+    pub limit: usize,
+    pub offset: usize,
+    pub with_payload: WithPayload,
+    pub with_vector: bool,
+}
+
+/// What a fused query had to choose from, so a client can see how far its prefetches' limits
+/// let the ranking go.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Candidates {
+    /// The distinct points the prefetches handed to fusion, which is as far as the fused
+    /// ranking goes.
+    pub pool: usize,
+    /// Each prefetch's limit and how many points it handed to fusion after its score
+    /// threshold, in request order.
+    pub sources: Vec<(usize, usize)>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FusedResult {
+    pub points: Vec<ScoredPoint>,
+    pub candidates: Candidates,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -470,83 +551,136 @@ impl Collection {
     /// [`Collection::search`] against a view the caller holds, so several searches can see
     /// the same points.
     fn search_in(&self, view: &View, req: &SearchRequest) -> Result<Vec<ScoredPoint>> {
-        let window = req.offset.saturating_add(req.limit);
-        if window > MAX_RESULT_WINDOW {
-            return Err(QueryError::Invalid(format!(
-                "offset plus limit may be at most {MAX_RESULT_WINDOW}, got {window}"
-            )));
-        }
-        if let Some(ef) = req.hnsw_ef
-            && matches!(req.query, Query::Vector(_))
-            && !(1..=MAX_HNSW_EF).contains(&ef)
-        {
-            return Err(QueryError::Invalid(format!(
-                "hnsw_ef must be between 1 and {MAX_HNSW_EF}, got {ef}"
-            )));
-        }
+        let window = check_window(req.offset, req.limit)?;
+        check_ef(&req.query, req.hnsw_ef)?;
+        check_threshold(req.score_threshold)?;
         check_projection(&req.with_payload)?;
         if let Some(f) = &req.filter {
             f.validate()?;
         }
-        let (top, scale) = match &req.query {
+        let leaf = Leaf {
+            query: &req.query,
+            filter: req.filter.as_ref(),
+            limit: window,
+            exact: req.exact,
+            hnsw_ef: req.hnsw_ef,
+            score_threshold: req.score_threshold,
+        };
+        let (hits, scale) = self.rank(view, &leaf)?;
+        hits.into_iter()
+            .skip(req.offset)
+            .map(|s| {
+                let score = scale.to_user(s.score);
+                scored(view, s.key, score, &req.with_payload, req.with_vector)
+            })
+            .collect()
+    }
+
+    /// Runs several searches and fuses their results into one ranking, best first.
+    pub fn query(&self, req: &FusedRequest) -> Result<FusedResult> {
+        let window = check_window(req.offset, req.limit)?;
+        if !(1..=MAX_PREFETCH).contains(&req.prefetch.len()) {
+            return Err(QueryError::field(
+                "prefetch",
+                format!(
+                    "a query needs between 1 and {MAX_PREFETCH} prefetches, got {}",
+                    req.prefetch.len()
+                ),
+            ));
+        }
+        req.fusion
+            .validate()
+            .map_err(|e| QueryError::field("k", e))?;
+        check_projection(&req.with_payload)?;
+        if let Some(f) = &req.filter {
+            f.validate()?;
+        }
+        let mut limits = Vec::with_capacity(req.prefetch.len());
+        for (i, p) in req.prefetch.iter().enumerate() {
+            let limit = check_prefetch(p, req.filter.as_ref(), window)
+                .map_err(|e| QueryError::Prefetch(i, e.into()))?;
+            limits.push(limit);
+        }
+        let budget: usize = limits.iter().sum();
+        if budget < window {
+            return Err(QueryError::field(
+                "limit",
+                format!(
+                    "offset plus limit is {window}, more than the {budget} points the \
+                     prefetches can return together, so raise their limits"
+                ),
+            ));
+        }
+
+        // Every prefetch reads the same view, so they all rank the same points.
+        let view = self.shard.view();
+        let mut lists = Vec::with_capacity(req.prefetch.len());
+        let mut sources = Vec::with_capacity(req.prefetch.len());
+        for (i, (p, &limit)) in req.prefetch.iter().zip(&limits).enumerate() {
+            let filter = both(req.filter.as_ref(), p.filter.as_ref());
+            let leaf = Leaf {
+                query: &p.query,
+                filter: filter.as_ref(),
+                limit,
+                exact: p.exact,
+                hnsw_ef: p.hnsw_ef,
+                score_threshold: p.score_threshold,
+            };
+            let (hits, _) = self
+                .rank(&view, &leaf)
+                .map_err(|e| QueryError::Prefetch(i, e.into()))?;
+            sources.push((limit, hits.len()));
+            lists.push((p.weight, hits));
+        }
+        let fused = req.fusion.fuse(&lists);
+        let pool = fused.len();
+        let points = fused
+            .into_iter()
+            .skip(req.offset)
+            .take(req.limit)
+            .map(|s| scored(&view, s.key, s.score, &req.with_payload, req.with_vector))
+            .collect::<Result<_>>()?;
+        Ok(FusedResult {
+            points,
+            candidates: Candidates { pool, sources },
+        })
+    }
+
+    /// One search's best points, best first, with internal scores, and how they read in the
+    /// API. The filter must be valid already.
+    fn rank(&self, view: &View, leaf: &Leaf<'_>) -> Result<(Vec<Scored<PointId>>, Scale)> {
+        let (mut hits, scale) = match leaf.query {
             Query::Vector(vector) => {
                 let VectorConfig { dim, distance } = self.shard.config();
                 let query = distance.prepare(dim, vector.clone())?;
                 (
-                    self.rank_vector(view, &query, req, window)?,
+                    self.rank_vector(view, &query, leaf)?,
                     Scale::Distance(distance),
                 )
             }
-            Query::Text(q) => (
-                text::rank(view, q, req.filter.as_ref(), window)?,
-                Scale::Bm25,
-            ),
+            Query::Text(q) => (text::rank(view, q, leaf.filter, leaf.limit)?, Scale::Bm25),
         };
-
-        let mut out = Vec::new();
-        for s in top.into_iter().skip(req.offset) {
-            let score = scale.to_user(s.score);
-            if let Some(t) = req.score_threshold {
-                let passes = if scale.higher_is_better() {
-                    score >= t
-                } else {
-                    score <= t
-                };
-                // Results come best first, so the rest fail too.
-                if !passes {
-                    break;
-                }
-            }
-            let (payload, vector) = if req.with_payload == WithPayload::None && !req.with_vector {
-                (None, None)
-            } else {
-                let rec = view
-                    .get(s.key)?
-                    .expect("the view still holds every point it scored");
-                (
-                    project(&rec.payload, &req.with_payload),
-                    req.with_vector.then_some(rec.vector),
-                )
-            };
-            out.push(ScoredPoint {
-                id: s.key,
-                score,
-                payload,
-                vector,
-            });
+        if let Some(t) = leaf.score_threshold {
+            // Hits come best first, so the ones failing the threshold are all at the end.
+            let keep = hits
+                .iter()
+                .take_while(|s| scale.passes(scale.to_user(s.score), t))
+                .count();
+            hits.truncate(keep);
         }
-        Ok(out)
+        Ok((hits, scale))
     }
 
-    /// The best `window` points for a prepared vector, best first, with internal scores.
+    /// The best `leaf.limit` points for a prepared vector, best first, with internal scores.
     fn rank_vector(
         &self,
         view: &View,
         query: &[f32],
-        req: &SearchRequest,
-        window: usize,
+        leaf: &Leaf<'_>,
     ) -> Result<Vec<Scored<PointId>>> {
         let VectorConfig { dim, distance } = self.shard.config();
+        let window = leaf.limit;
+        let filter = leaf.filter;
         if window == 0 {
             return Ok(Vec::new());
         }
@@ -554,23 +688,20 @@ impl Collection {
         for p in view.recent() {
             let score = distance.score(query, p.vector);
             if top.would_keep(&p.id, score)
-                && req
-                    .filter
-                    .as_ref()
-                    .map_or(Ok(true), |f| p.payload().map(|pl| f.matches(p.id, &pl)))?
+                && filter.map_or(Ok(true), |f| p.payload().map(|pl| f.matches(p.id, &pl)))?
             {
                 top.push(p.id, score);
             }
         }
-        let ef = req.hnsw_ef.unwrap_or(DEFAULT_HNSW_EF).max(window);
+        let ef = leaf.hnsw_ef.unwrap_or(DEFAULT_HNSW_EF).max(window);
         for seg in view.segments() {
-            let bounds = segment_bounds(&seg, req.filter.as_ref());
-            let check = |row| match &req.filter {
+            let bounds = segment_bounds(&seg, filter);
+            let check = |row| match filter {
                 Some(f) => row_matches(&seg, f, row),
                 None => Ok(true),
             };
             let vectors = seg.vectors();
-            let graph = seg.graph().filter(|_| !req.exact);
+            let graph = seg.graph().filter(|_| !leaf.exact);
             // Rows are in id order within a segment, so ties cut inside it keep the same ids
             // the merge would.
             let hits = match graph {
@@ -621,6 +752,123 @@ impl Collection {
     }
 }
 
+/// One search to rank points by, with everything checked already.
+struct Leaf<'a> {
+    query: &'a Query,
+    filter: Option<&'a Filter>,
+    /// How many of the best points to return.
+    limit: usize,
+    exact: bool,
+    hnsw_ef: Option<usize>,
+    score_threshold: Option<f32>,
+}
+
+/// `offset + limit`, checked against [`MAX_RESULT_WINDOW`].
+fn check_window(offset: usize, limit: usize) -> Result<usize> {
+    let window = offset.saturating_add(limit);
+    if window > MAX_RESULT_WINDOW {
+        return Err(QueryError::field(
+            "limit",
+            format!("offset plus limit may be at most {MAX_RESULT_WINDOW}, got {window}"),
+        ));
+    }
+    Ok(window)
+}
+
+/// Checks a vector search's beam width, which other searches ignore.
+fn check_ef(query: &Query, hnsw_ef: Option<usize>) -> Result<()> {
+    if let Some(ef) = hnsw_ef
+        && matches!(query, Query::Vector(_))
+        && !(1..=MAX_HNSW_EF).contains(&ef)
+    {
+        return Err(QueryError::field(
+            "hnsw_ef",
+            format!("hnsw_ef must be between 1 and {MAX_HNSW_EF}, got {ef}"),
+        ));
+    }
+    Ok(())
+}
+
+/// Checks a score threshold is a finite number.
+fn check_threshold(threshold: Option<f32>) -> Result<()> {
+    match threshold {
+        Some(t) if !t.is_finite() => Err(QueryError::field(
+            "score_threshold",
+            format!("score_threshold must be a finite number that fits in 32 bits, got {t}"),
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Checks a prefetch and returns its limit, `window` when it gives none.
+fn check_prefetch(p: &Prefetch, root: Option<&Filter>, window: usize) -> Result<usize> {
+    check_weight(p.weight).map_err(|e| QueryError::field("weight", e))?;
+    let limit = p.limit.unwrap_or(window);
+    if !(1..=MAX_RESULT_WINDOW).contains(&limit) {
+        return Err(QueryError::field(
+            "limit",
+            format!("limit must be between 1 and {MAX_RESULT_WINDOW}, got {limit}"),
+        ));
+    }
+    check_ef(&p.query, p.hnsw_ef)?;
+    check_threshold(p.score_threshold)?;
+    if let Some(f) = &p.filter {
+        f.validate()?;
+        // The two filters run as one, which has to stay within the limits too.
+        if let Some(both) = both(root, Some(f))
+            && let Err(e) = both.validate()
+        {
+            let reason = match e {
+                nocturnum_core::Error::InvalidFilter { reason, .. } => reason,
+                e => e.to_string(),
+            };
+            return Err(QueryError::field(
+                "filter",
+                format!("together with the query's filter, {reason}"),
+            ));
+        }
+    }
+    Ok(limit)
+}
+
+/// Both filters at once, each already checked on its own.
+fn both(a: Option<&Filter>, b: Option<&Filter>) -> Option<Filter> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(Filter {
+            must: vec![Condition::Filter(a.clone()), Condition::Filter(b.clone())],
+            ..Filter::default()
+        }),
+        (a, b) => a.or(b).cloned(),
+    }
+}
+
+/// A result with as much of its point as the request asks for.
+fn scored(
+    view: &View,
+    id: PointId,
+    score: f32,
+    with_payload: &WithPayload,
+    with_vector: bool,
+) -> Result<ScoredPoint> {
+    let (payload, vector) = if *with_payload == WithPayload::None && !with_vector {
+        (None, None)
+    } else {
+        let rec = view
+            .get(id)?
+            .expect("the view still holds every point it scored");
+        (
+            project(&rec.payload, with_payload),
+            with_vector.then_some(rec.vector),
+        )
+    };
+    Ok(ScoredPoint {
+        id,
+        score,
+        payload,
+        vector,
+    })
+}
+
 /// How a ranking's internal scores, where higher is always better, read in the API.
 #[derive(Debug, Clone, Copy)]
 enum Scale {
@@ -640,6 +888,16 @@ impl Scale {
         match self {
             Scale::Distance(d) => d.user_higher_is_better(),
             Scale::Bm25 => true,
+        }
+    }
+
+    /// Whether an API score passes a threshold, at least it for similarities and text, at
+    /// most it for distances.
+    fn passes(self, score: f32, threshold: f32) -> bool {
+        if self.higher_is_better() {
+            score >= threshold
+        } else {
+            score <= threshold
         }
     }
 }
@@ -716,9 +974,10 @@ fn check_projection(with: &WithPayload) -> Result<()> {
     if let WithPayload::Include(paths) | WithPayload::Exclude(paths) = with {
         for p in paths {
             if !p.steps().iter().all(|s| matches!(s, PathStep::Key(_))) {
-                return Err(QueryError::Invalid(format!(
-                    "payload paths to include or exclude must be object keys, {p} is not"
-                )));
+                return Err(QueryError::field(
+                    "with_payload",
+                    format!("payload paths to include or exclude must be object keys, {p} is not"),
+                ));
             }
         }
     }
@@ -793,6 +1052,8 @@ fn remove(map: &mut Map<String, Value>, path: &[&str]) {
     }
 }
 
+#[cfg(test)]
+mod fused_tests;
 mod recall;
 #[cfg(test)]
 mod tests;

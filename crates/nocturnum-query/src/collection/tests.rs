@@ -373,9 +373,12 @@ fn requests_out_of_bounds_are_refused() {
     ));
     let mut req = SearchRequest::new(vec![1.0, 0.0], 1);
     req.hnsw_ef = Some(MAX_HNSW_EF + 1);
-    assert!(matches!(c.search(&req), Err(QueryError::Invalid(_))));
+    assert!(matches!(c.search(&req), Err(QueryError::Field { at, .. }) if at == "hnsw_ef"));
     req.hnsw_ef = Some(0);
-    assert!(matches!(c.search(&req), Err(QueryError::Invalid(_))));
+    assert!(c.search(&req).unwrap_err().is_invalid());
+    req.hnsw_ef = None;
+    req.score_threshold = Some(f32::NAN);
+    assert!(matches!(c.search(&req), Err(QueryError::Field { at, .. }) if at == "score_threshold"));
     let scroll = ScrollRequest {
         filter: None,
         after: None,

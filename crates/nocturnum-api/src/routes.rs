@@ -11,9 +11,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use nocturnum_core::{PayloadIndexSpec, PointId, VectorConfig};
 use nocturnum_query::collection::MAX_RESULT_WINDOW;
+use nocturnum_query::fusion::DEFAULT_RRF_K;
 use nocturnum_query::{
-    Bm25, Collection, Query, QueryError, RecallRequest, ScrollRequest, SearchRequest, TextQuery,
-    WithPayload,
+    Bm25, Collection, FusedRequest, Fusion, Prefetch, Query, QueryError, RecallRequest,
+    ScrollRequest, SearchRequest, TextQuery, WithPayload,
 };
 use nocturnum_storage::{Job, PointWrite};
 use serde::Serialize;
@@ -101,6 +102,7 @@ pub(crate) fn routes() -> Router<Arc<Api>> {
         .route(&format!("{c}/points/scroll"), post(scroll))
         .route(&format!("{c}/points/count"), post(count))
         .route(&format!("{c}/points/search"), post(search))
+        .route(&format!("{c}/points/query"), post(query))
         .route(&format!("{c}/points/recall"), post(recall))
         .route(&format!("{c}/status"), get(collection_status))
         .route(&format!("{c}/points/payload/set"), post(set_payload))
@@ -569,21 +571,7 @@ async fn count(State(api): Shared, Path(name): Path<String>, Body(body): Body<Co
 
 async fn search(State(api): Shared, Path(name): Path<String>, Body(body): Body<Search>) -> Reply {
     with_collection(&api, name, move |c| {
-        let query = match (body.vector, body.text) {
-            (Some(vector), None) => {
-                let VectorConfig { dim, distance } = c.config();
-                distance
-                    .check(dim, &vector)
-                    .map_err(|e| ApiError::from(e).at("vector"))?;
-                Query::Vector(vector)
-            }
-            (None, Some(text)) => Query::Text(text_query(text, "text")?),
-            _ => {
-                return Err(ApiError::invalid(
-                    "a search needs exactly one of vector and text",
-                ));
-            }
-        };
+        let query = leaf_query(c, body.vector, body.text)?;
         let points = c
             .search(&SearchRequest {
                 query,
@@ -604,9 +592,89 @@ async fn search(State(api): Shared, Path(name): Path<String>, Body(body): Body<S
     .await
 }
 
-/// Maps a search error, pointing text-query errors inside `at`.
+async fn query(State(api): Shared, Path(name): Path<String>, Body(body): Body<QueryIn>) -> Reply {
+    with_collection(&api, name, move |c| {
+        let fusion = match (body.fusion, body.k) {
+            (FusionIn::Rrf, k) => Fusion::Rrf {
+                k: k.unwrap_or(DEFAULT_RRF_K),
+            },
+            (FusionIn::Dbsf, None) => Fusion::Dbsf,
+            (FusionIn::Dbsf, Some(_)) => {
+                return Err(ApiError::invalid("k only applies to rrf fusion").at("k"));
+            }
+        };
+        if let Err(e) = fusion.validate() {
+            return Err(ApiError::invalid(e).at("k"));
+        }
+        let mut prefetch = Vec::with_capacity(body.prefetch.len());
+        for (i, p) in body.prefetch.into_iter().enumerate() {
+            let at = format!("prefetch[{i}]");
+            let query = leaf_query(c, p.vector, p.text).map_err(|e| e.within(&at))?;
+            prefetch.push(Prefetch {
+                query,
+                filter: p.filter,
+                limit: p.limit,
+                score_threshold: p.score_threshold,
+                exact: p.exact,
+                hnsw_ef: p.hnsw_ef,
+                weight: p.weight.unwrap_or(1.0),
+            });
+        }
+        let result = c
+            .query(&FusedRequest {
+                prefetch,
+                fusion,
+                filter: body.filter,
+                limit: body.limit,
+                offset: body.offset,
+                with_payload: body.with_payload.0,
+                with_vector: body.with_vector,
+            })
+            .map_err(|e| query_error(c, e, "text"))?;
+        Ok(QueryOut {
+            points: result.points.into_iter().map(ScoredOut::from).collect(),
+            candidates: CandidatesOut {
+                pool: result.candidates.pool,
+                sources: result
+                    .candidates
+                    .sources
+                    .into_iter()
+                    .map(|(limit, found)| SourceOut { limit, found })
+                    .collect(),
+            },
+        })
+    })
+    .await
+}
+
+/// What a search ranks by, from exactly one of its `vector` and `text`.
+fn leaf_query(
+    c: &Collection,
+    vector: Option<Vec<f32>>,
+    text: Option<TextIn>,
+) -> Result<Query, ApiError> {
+    match (vector, text) {
+        (Some(vector), None) => {
+            let VectorConfig { dim, distance } = c.config();
+            distance
+                .check(dim, &vector)
+                .map_err(|e| ApiError::from(e).at("vector"))?;
+            Ok(Query::Vector(vector))
+        }
+        (None, Some(text)) => Ok(Query::Text(text_query(text, "text")?)),
+        _ => Err(ApiError::invalid(
+            "a search needs exactly one of vector and text",
+        )),
+    }
+}
+
+/// Maps a search error, pointing text-query errors inside `at`, and inside their prefetch
+/// for a hybrid query.
 fn query_error(c: &Collection, e: QueryError, at: &str) -> ApiError {
-    let field = match &e {
+    let field = match e {
+        QueryError::Prefetch(i, inner) => {
+            return query_error(c, *inner, at).within(&format!("prefetch[{i}]"));
+        }
         QueryError::NoTextIndex(_) => Some("field"),
         QueryError::TooManyWords => Some("query"),
         _ => None,

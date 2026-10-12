@@ -510,7 +510,7 @@ async fn errors_say_what_and_where() {
             json!({"vector": [1.0, 0.0], "limit": 10_001}),
         )
         .await;
-    check(r, bad, "invalid_request", None);
+    check(r, bad, "invalid_request", Some("limit"));
     let r = s
         .post(
             "/v1/collections/c/points/delete",
@@ -889,6 +889,115 @@ async fn text_search_ranks_by_bm25() {
     let (status, _) =
         search(json!({"text": {"field": "body", "query": "red"}, "hnsw_ef": 0})).await;
     assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn hybrid_queries_fuse_vector_and_text_searches() {
+    let s = start().await;
+    s.create("c", 2, "cosine").await;
+    let points = json!({"points": [
+        {"id": 1, "vector": [1.0, 0.0], "payload": {"body": "caddy cert rotation", "n": 1}},
+        {"id": 2, "vector": [0.9, 0.1], "payload": {"body": "renewing tls on the proxy", "n": 2}},
+        {"id": 3, "vector": [0.0, 1.0], "payload": {"body": "error E1234 in caddy", "n": 3}},
+        {"id": 4, "vector": [0.1, 0.9], "payload": {"body": "garden notes", "n": 4}}
+    ]});
+    assert_eq!(
+        s.put("/v1/collections/c/points", points).await.0,
+        StatusCode::OK
+    );
+    s.put(
+        "/v1/collections/c/indexes",
+        json!({"path": "body", "kind": "text"}),
+    )
+    .await;
+    let query = |body: Value| async { s.post("/v1/collections/c/points/query", body).await };
+
+    let (status, v) = query(json!({
+        "prefetch": [
+            {"vector": [1.0, 0.05]},
+            {"text": {"field": "body", "query": "E1234"}, "weight": 2}
+        ],
+        "limit": 3,
+        "with_payload": false
+    }))
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(ids(&v), [json!(3), json!(1), json!(2)]);
+    assert_eq!(
+        v["candidates"],
+        json!({"pool": 4, "sources": [{"limit": 3, "found": 3}, {"limit": 3, "found": 1}]})
+    );
+
+    let (status, v) = query(json!({
+        "prefetch": [{"vector": [1.0, 0.0], "limit": 2}, {"text": {"field": "body", "query": "caddy"}, "limit": 2}],
+        "fusion": "dbsf",
+        "filter": {"must": [{"key": "n", "range": {"lte": 3}}]},
+        "limit": 3
+    }))
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(v["candidates"]["pool"], 3);
+    assert_eq!(v["points"][0]["payload"]["body"], "caddy cert rotation");
+
+    let bad = StatusCode::BAD_REQUEST;
+    let cases = [
+        (json!({"prefetch": []}), Some("prefetch")),
+        (
+            json!({"prefetch": [{"vector": [1.0, 0.0], "limit": 2}], "limit": 3}),
+            Some("limit"),
+        ),
+        (
+            json!({"prefetch": [{"vector": [1.0, 0.0], "limit": 0}]}),
+            Some("prefetch[0].limit"),
+        ),
+        (
+            json!({"prefetch": [{"vector": [1.0, 0.0], "hnsw_ef": 0}]}),
+            Some("prefetch[0].hnsw_ef"),
+        ),
+        (
+            json!({"prefetch": [{"vector": [1.0, 0.0], "score_threshold": 1e100}]}),
+            Some("prefetch[0].score_threshold"),
+        ),
+        (
+            json!({"prefetch": [{"vector": [1.0]}]}),
+            Some("prefetch[0].vector"),
+        ),
+        (
+            json!({"prefetch": [{"vector": [1.0, 0.0]}, {"text": {"field": "title", "query": "x"}}]}),
+            Some("prefetch[1].text.field"),
+        ),
+        (
+            json!({"prefetch": [{"text": {"field": "body", "query": "x", "k1": -1}}]}),
+            Some("prefetch[0].text.k1"),
+        ),
+        (
+            json!({"prefetch": [{"vector": [1.0, 0.0], "weight": -1}]}),
+            Some("prefetch[0].weight"),
+        ),
+        (
+            json!({"prefetch": [{"vector": [1.0, 0.0], "filter": {"must": [{"key": "a", "any": []}]}}]}),
+            Some("prefetch[0].filter.must[0]"),
+        ),
+        (
+            json!({"prefetch": [{"vector": [1.0, 0.0]}], "fusion": "dbsf", "k": 3}),
+            Some("k"),
+        ),
+        (
+            json!({"prefetch": [{"vector": [1.0, 0.0]}], "fusion": "max"}),
+            None,
+        ),
+        (
+            json!({"prefetch": [{"vector": [1.0, 0.0], "text": {"field": "body", "query": "x"}}]}),
+            Some("prefetch[0]"),
+        ),
+    ];
+    for (body, at) in cases {
+        let (status, v) = query(body.clone()).await;
+        assert_eq!(status, bad, "{body}: {v}");
+        if let Some(at) = at {
+            assert_eq!(v["error"]["at"], at, "{body}: {v}");
+        }
+    }
 }
 
 #[tokio::test]

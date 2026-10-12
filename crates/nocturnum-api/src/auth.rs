@@ -119,7 +119,7 @@ fn read_only_allows(method: &Method, path: &str) -> bool {
                 "collections",
                 _,
                 "points",
-                "search" | "scroll" | "count" | "get" | "recall"
+                "search" | "query" | "scroll" | "count" | "get" | "recall"
             ]
         )
 }
@@ -256,6 +256,10 @@ mod tests {
         assert!(read_only_allows(
             &Method::POST,
             "/v1/collections/notes/points/recall"
+        ));
+        assert!(read_only_allows(
+            &Method::POST,
+            "/v1/collections/notes/points/query"
         ));
         assert!(read_only_allows(&Method::GET, "/v1/collections"));
         assert!(!read_only_allows(&Method::PUT, p));

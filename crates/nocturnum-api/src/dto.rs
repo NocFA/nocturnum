@@ -267,6 +267,68 @@ pub struct Search {
     pub with_vector: bool,
 }
 
+/// A hybrid query, fusing the results of several searches.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QueryIn {
+    pub prefetch: Vec<PrefetchIn>,
+    #[serde(default)]
+    pub fusion: FusionIn,
+    /// Reciprocal rank fusion's `k`, only with `rrf`.
+    pub k: Option<f64>,
+    pub filter: Option<Filter>,
+    #[serde(default = "ten")]
+    pub limit: usize,
+    #[serde(default)]
+    pub offset: usize,
+    #[serde(default)]
+    pub with_payload: WithPayloadIn,
+    #[serde(default)]
+    pub with_vector: bool,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FusionIn {
+    #[default]
+    Rrf,
+    Dbsf,
+}
+
+/// One search in a hybrid query.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrefetchIn {
+    /// Exactly one of `vector` and `text` says what to rank by.
+    pub vector: Option<Vec<f32>>,
+    pub text: Option<TextIn>,
+    pub filter: Option<Filter>,
+    pub limit: Option<usize>,
+    pub score_threshold: Option<f32>,
+    #[serde(default)]
+    pub exact: bool,
+    pub hnsw_ef: Option<usize>,
+    pub weight: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct QueryOut {
+    pub points: Vec<ScoredOut>,
+    pub candidates: CandidatesOut,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CandidatesOut {
+    pub pool: usize,
+    pub sources: Vec<SourceOut>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SourceOut {
+    pub limit: usize,
+    pub found: usize,
+}
+
 /// A text search's words and BM25 knobs.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
