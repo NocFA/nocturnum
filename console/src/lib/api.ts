@@ -107,6 +107,12 @@ export interface Scored extends Point {
 	score: number;
 }
 
+/** What a hybrid query's prefetches handed to fusion, see docs/api/v1.md. */
+export interface Candidates {
+	pool: number;
+	sources: { limit: number; found: number }[];
+}
+
 export interface Page {
 	points: Point[];
 	next: PointId | null;
@@ -250,6 +256,8 @@ export const api = {
 		),
 	search: (name: string, body: Json) =>
 		request<{ points: Scored[] }>('POST', `${c(name)}/points/search`, body),
+	query: (name: string, body: Json) =>
+		request<{ points: Scored[]; candidates: Candidates }>('POST', `${c(name)}/points/query`, body),
 	recall: (name: string, body: Json) =>
 		request<RecallReport>('POST', `${c(name)}/points/recall`, body),
 	deletePoints: (name: string, ids: PointId[]) =>

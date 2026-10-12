@@ -388,6 +388,9 @@ The points table runs 28px rows with mono ids, and the selected row takes Crimso
 ### ef-Sweep Chart
 The search quality panel leads with recall as a 30px metric, then a slate line chart of recall across ef values: a dashed line-2 reference, a 1.2px slate path, hollow slate point rings on surface fill and mono value labels. The point for the collection's current ef is filled crimson as the selected value, every point is a link that brightens on hover, and three latency figures sit under it in a hairline-divided row.
 
+### Query Modes
+The query form leads with a Rank by segmented control (Vector, Text, Hybrid), and each mode shows only its own fields. Hybrid stacks a Vector search and a Text search group, each a 13px semibold heading over a hairline with its own weight and candidates, then the Fusion control, and its results gain a 12px text-3 candidate strip under the panel header, the pool and each search's found of limit in tabular figures, with an amber flag at the right when a short page came from a search that filled its candidate limit. In Text and Hybrid modes a collection without a text index shows a ground-well notice linking to the Overview tab and disables Search.
+
 ### Dialogs, Menus and Toasts
 The confirm dialog is a 460px surface panel with 8px corners, a 15px semibold title and text-2 body, rising 6px into place over 200ms on the shared ease-out curve. Menus are raised 6px-cornered lists of 30px rows with 4px padding, and toasts sit bottom-right on raised fill with a coloured icon, flying in 8px over 180ms.
 

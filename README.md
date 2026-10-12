@@ -29,9 +29,9 @@ The engine, the REST server and the console run end to end, with 301 tests passi
 
 The console comes with the binary on the same port, for browsing collections, points and payloads, running queries, checking search quality, taking, restoring and scheduling snapshots, watching the engine work and setting keys, with `j` and `k` stepping through points beside their JSON.
 
-Its query page searches from a stored point or a pasted vector, with a filter, a limit and a beam width, and can run exact search alongside to show how many of the results match.
+Its query page ranks by a vector, from a stored point or a pasted one, by words over a text index, or by both at once with their rankings fused, and can run exact search alongside a vector search to show how many of the results match.
 
-<img src="docs/assets/query.png" alt="The query page of the notes collection on synthetic demo data: a search from point 40002 with limit 10 and hnsw_ef 128 on the left, and on the right ten results with their similarity scores and payloads, headed 10 of 10 match exact search and 6.2 ms round trip, above the selected result's payload as coloured JSON." width="100%">
+<img src="docs/assets/query.png" alt="The query page of the notes collection on synthetic demo data: a hybrid search fusing a vector search from point 40002 with a text search for snapshot backup over the title field, rank fusion selected, and on the right ten results with their fused scores and payloads under a strip reading 99 candidates, vector found 50 of 50, text found 50 of 50, above the selected result's payload as coloured JSON." width="100%">
 
 ## How you use it
 
