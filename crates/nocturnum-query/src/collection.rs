@@ -33,13 +33,14 @@ use nocturnum_core::{
     Ack, Condition, Distance, Filter, JsonPath, Payload, PayloadIndexSpec, PointId, SparseVector,
     VectorConfig,
 };
-use nocturnum_index::flat::search_filtered;
+use nocturnum_index::flat::search_filtered_until;
 
 pub use recall::{
     MAX_RECALL_EF_VALUES, MAX_RECALL_LIMIT, MAX_RECALL_SAMPLES, RECALL_TIME_BUDGET, RecallReport,
     RecallRequest, RecallRun,
 };
 
+use crate::deadline::Deadline;
 use crate::fusion::{Fusion, check_weight};
 use crate::plan::{PlanOptions, Strategy, choose};
 use nocturnum_index::{Bm25, Bounds, Scored, TopK};
@@ -554,12 +555,26 @@ impl Collection {
 
     /// The best matches for a vector or some words, best first.
     pub fn search(&self, req: &SearchRequest) -> Result<Vec<ScoredPoint>> {
-        self.search_in(&self.shard.view(), req)
+        self.search_until(req, Deadline::NONE)
+    }
+
+    /// [`Collection::search`], stopping with [`QueryError::TimedOut`] once `deadline` passes.
+    pub fn search_until(
+        &self,
+        req: &SearchRequest,
+        deadline: Deadline,
+    ) -> Result<Vec<ScoredPoint>> {
+        self.search_in(&self.shard.view(), req, deadline)
     }
 
     /// [`Collection::search`] against a view the caller holds, so several searches can see
     /// the same points.
-    fn search_in(&self, view: &View, req: &SearchRequest) -> Result<Vec<ScoredPoint>> {
+    fn search_in(
+        &self,
+        view: &View,
+        req: &SearchRequest,
+        deadline: Deadline,
+    ) -> Result<Vec<ScoredPoint>> {
         let window = check_window(req.offset, req.limit)?;
         check_ef(&req.query, req.hnsw_ef)?;
         check_threshold(req.score_threshold)?;
@@ -574,19 +589,30 @@ impl Collection {
             exact: req.exact,
             hnsw_ef: req.hnsw_ef,
             score_threshold: req.score_threshold,
+            deadline,
         };
         let (hits, scale) = self.rank(view, &leaf)?;
-        hits.into_iter()
+        let out = hits
+            .into_iter()
             .skip(req.offset)
-            .map(|s| {
+            .enumerate()
+            .map(|(i, s)| {
+                deadline.tick(i)?;
                 let score = scale.to_user(s.score);
                 scored(view, s.key, score, &req.with_payload, req.with_vector)
             })
-            .collect()
+            .collect::<Result<_>>()?;
+        deadline.check()?;
+        Ok(out)
     }
 
     /// Runs several searches and fuses their results into one ranking, best first.
     pub fn query(&self, req: &FusedRequest) -> Result<FusedResult> {
+        self.query_until(req, Deadline::NONE)
+    }
+
+    /// [`Collection::query`], stopping with [`QueryError::TimedOut`] once `deadline` passes.
+    pub fn query_until(&self, req: &FusedRequest, deadline: Deadline) -> Result<FusedResult> {
         let window = check_window(req.offset, req.limit)?;
         if !(1..=MAX_PREFETCH).contains(&req.prefetch.len()) {
             return Err(QueryError::field(
@@ -634,6 +660,7 @@ impl Collection {
                 exact: p.exact,
                 hnsw_ef: p.hnsw_ef,
                 score_threshold: p.score_threshold,
+                deadline,
             };
             let (hits, _) = self
                 .rank(&view, &leaf)
@@ -641,14 +668,20 @@ impl Collection {
             sources.push((limit, hits.len()));
             lists.push((p.weight, hits));
         }
+        deadline.check()?;
         let fused = req.fusion.fuse(&lists);
         let pool = fused.len();
         let points = fused
             .into_iter()
             .skip(req.offset)
             .take(req.limit)
-            .map(|s| scored(&view, s.key, s.score, &req.with_payload, req.with_vector))
+            .enumerate()
+            .map(|(i, s)| {
+                deadline.tick(i)?;
+                scored(&view, s.key, s.score, &req.with_payload, req.with_vector)
+            })
             .collect::<Result<_>>()?;
+        deadline.check()?;
         Ok(FusedResult {
             points,
             candidates: Candidates { pool, sources },
@@ -658,6 +691,8 @@ impl Collection {
     /// One search's best points, best first, with internal scores, and how they read in the
     /// API. The filter must be valid already.
     fn rank(&self, view: &View, leaf: &Leaf<'_>) -> Result<(Vec<Scored<PointId>>, Scale)> {
+        // A read that used up its time waiting to start does not start.
+        leaf.deadline.check()?;
         let (mut hits, scale) = match leaf.query {
             Query::Vector(vector) => {
                 let VectorConfig { dim, distance } = self.shard.config();
@@ -667,9 +702,18 @@ impl Collection {
                     Scale::Distance(distance),
                 )
             }
-            Query::Text(q) => (text::rank(view, q, leaf.filter, leaf.limit)?, Scale::Raw),
-            Query::Sparse(q) => (sparse::rank(view, q, leaf.filter, leaf.limit)?, Scale::Raw),
+            Query::Text(q) => (
+                text::rank(view, q, leaf.filter, leaf.limit, leaf.deadline)?,
+                Scale::Raw,
+            ),
+            Query::Sparse(q) => (
+                sparse::rank(view, q, leaf.filter, leaf.limit, leaf.deadline)?,
+                Scale::Raw,
+            ),
         };
+        // The loops check the clock now and then, so one last look keeps a search that ran over
+        // from answering as if it had not.
+        leaf.deadline.check()?;
         if let Some(t) = leaf.score_threshold {
             // Hits come best first, so the ones failing the threshold are all at the end.
             let keep = hits
@@ -695,7 +739,8 @@ impl Collection {
             return Ok(Vec::new());
         }
         let mut top = TopK::new(window);
-        for p in view.recent() {
+        for (i, p) in view.recent().enumerate() {
+            leaf.deadline.tick(i)?;
             let score = distance.score(query, p.vector);
             if top.would_keep(&p.id, score)
                 && filter.map_or(Ok(true), |f| p.payload().map(|pl| f.matches(p.id, &pl)))?
@@ -705,25 +750,38 @@ impl Collection {
         }
         let ef = leaf.hnsw_ef.unwrap_or(DEFAULT_HNSW_EF).max(window);
         for seg in view.segments() {
+            leaf.deadline.check()?;
             let bounds = segment_bounds(&seg, filter);
-            let check = |row| match filter {
-                Some(f) => row_matches(&seg, f, row),
-                None => Ok(true),
+            let check = |row| -> Result<bool> {
+                match filter {
+                    Some(f) => Ok(row_matches(&seg, f, row)?),
+                    None => Ok(true),
+                }
             };
             let vectors = seg.vectors();
             let graph = seg.graph().filter(|_| !leaf.exact);
+            let interrupt = || leaf.deadline.check();
+            let mut steps = 0usize;
             // Rows are in id order within a segment, so ties cut inside it keep the same ids
             // the merge would.
             let hits = match graph {
-                None => search_filtered(distance, vectors, dim, query, window, &bounds, check)?,
+                None => search_filtered_until(
+                    distance, vectors, dim, query, window, &bounds, check, interrupt,
+                )?,
                 Some(g) => {
                     let plan = choose(bounds, &self.plan, check)?;
                     let b = &plan.bounds;
                     match plan.strategy {
-                        Strategy::Enumerate => {
-                            search_filtered(distance, vectors, dim, query, window, b, check)?
-                        }
+                        Strategy::Enumerate => search_filtered_until(
+                            distance, vectors, dim, query, window, b, check, interrupt,
+                        )?,
                         Strategy::Graph => g.search(vectors, query, window, ef, |row| {
+                            // Asked about every node good enough to queue, and only a queued
+                            // node is ever expanded, so between two ticks the walk scores at
+                            // most a thousand or so nodes' links, which paces the time limit
+                            // through one big segment.
+                            steps += 1;
+                            leaf.deadline.tick(steps)?;
                             if b.sure.contains(row) {
                                 Ok(true)
                             } else if b.maybe.contains(row) {
@@ -771,6 +829,7 @@ struct Leaf<'a> {
     exact: bool,
     hnsw_ef: Option<usize>,
     score_threshold: Option<f32>,
+    deadline: Deadline,
 }
 
 /// `offset + limit`, checked against [`MAX_RESULT_WINDOW`].

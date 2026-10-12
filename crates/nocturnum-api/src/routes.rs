@@ -1,6 +1,8 @@
 //! The endpoints, each a thin call into a [`Collection`] or the [`Registry`].
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use axum::Json;
 use axum::Router;
@@ -13,7 +15,7 @@ use nocturnum_core::{PayloadIndexSpec, PointId, SparseVector, VectorConfig};
 use nocturnum_query::collection::MAX_RESULT_WINDOW;
 use nocturnum_query::fusion::DEFAULT_RRF_K;
 use nocturnum_query::{
-    Bm25, Collection, FusedRequest, Fusion, Prefetch, Query, QueryError, RecallRequest,
+    Bm25, Collection, Deadline, FusedRequest, Fusion, Prefetch, Query, QueryError, RecallRequest,
     ScrollRequest, SearchRequest, SparseQuery, TextQuery, WithPayload,
 };
 use nocturnum_storage::{Job, PointWrite};
@@ -64,6 +66,49 @@ async fn with_collection<T: Serialize>(
 ) -> Reply {
     let registry = api.registry()?;
     run(move || encode(&f(&*registry.get(&name)?)?)).await
+}
+
+/// Runs a point read on the named collection once a read slot is free, passing the deadline
+/// it has to finish by, which counts from when the request's body has been read, so time
+/// spent waiting for a slot comes out of it.
+async fn with_read<T: Serialize>(
+    api: &Arc<Api>,
+    name: String,
+    f: impl FnOnce(&Collection, Deadline) -> Result<T, ApiError> + Send + 'static,
+) -> Reply {
+    let reads = &api.reads;
+    let deadline = Deadline::from(Instant::now(), reads.timeout);
+    let slot = match tokio::time::timeout(reads.timeout, reads.slots.clone().acquire_owned()).await
+    {
+        Ok(Ok(slot)) => slot,
+        _ => {
+            reads.refused.fetch_add(1, Ordering::Relaxed);
+            return Err(ApiError::unavailable(format!(
+                "{} reads were already running and none finished within {} s, so this one \
+                 was not started, try again shortly",
+                reads.limit,
+                reads.timeout.as_secs_f64()
+            )));
+        }
+    };
+    let registry = api.registry()?;
+    let api = api.clone();
+    run(move || {
+        let _slot = slot;
+        // A read whose time ran out while it waited does not start, and the count is kept
+        // here, beside the work, so a client that hung up still gets counted.
+        let result = deadline
+            .check()
+            .map_err(|e| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "timed_out", e.to_string()))
+            .and_then(|()| f(&*registry.get(&name)?, deadline));
+        if let Err(e) = &result
+            && e.code == "timed_out"
+        {
+            api.reads.timed_out.fetch_add(1, Ordering::Relaxed);
+        }
+        encode(&result?)
+    })
+    .await
 }
 
 /// Runs `f` on the registry on a blocking thread.
@@ -178,7 +223,7 @@ async fn readyz(State(api): Shared) -> Response {
 async fn metrics(State(api): Shared) -> Result<Response, ApiError> {
     let registry = api.registry.get().cloned();
     let api2 = api.clone();
-    let text = run(move || Ok(api2.metrics.render(registry.as_deref()))).await?;
+    let text = run(move || Ok(api2.metrics.render(registry.as_deref(), Some(&api2.reads)))).await?;
     Ok((
         [(
             header::CONTENT_TYPE,
@@ -474,7 +519,7 @@ async fn clear_payload(
 // Reads.
 
 async fn recall(State(api): Shared, Path(name): Path<String>, Body(body): Body<Recall>) -> Reply {
-    with_collection(&api, name, move |c| {
+    with_read(&api, name, move |c, _| {
         let req = RecallRequest {
             samples: body.samples,
             limit: body.limit,
@@ -509,7 +554,7 @@ async fn get_point(
     let id: PointId = id
         .parse()
         .map_err(|e: nocturnum_core::id::ParsePointIdError| ApiError::invalid(e.to_string()))?;
-    with_collection(&api, name, move |c| {
+    with_read(&api, name, move |c, _| {
         let with_payload = if p.with_payload {
             WithPayload::All
         } else {
@@ -536,7 +581,7 @@ async fn get_points(
         ))
         .at("ids"));
     }
-    with_collection(&api, name, move |c| {
+    with_read(&api, name, move |c, _| {
         let points = c
             .retrieve(&body.ids, &body.with_payload.0, body.with_vector)
             .map_err(|e| query_error(c, e, "text"))?;
@@ -548,7 +593,7 @@ async fn get_points(
 }
 
 async fn scroll(State(api): Shared, Path(name): Path<String>, Body(body): Body<Scroll>) -> Reply {
-    with_collection(&api, name, move |c| {
+    with_read(&api, name, move |c, _| {
         let page = c
             .scroll(&ScrollRequest {
                 filter: body.filter,
@@ -567,7 +612,7 @@ async fn scroll(State(api): Shared, Path(name): Path<String>, Body(body): Body<S
 }
 
 async fn count(State(api): Shared, Path(name): Path<String>, Body(body): Body<Count>) -> Reply {
-    with_collection(&api, name, move |c| {
+    with_read(&api, name, move |c, _| {
         let n = c
             .count(body.filter.as_ref())
             .map_err(|e| ApiError::from_query(c, e))?;
@@ -577,20 +622,23 @@ async fn count(State(api): Shared, Path(name): Path<String>, Body(body): Body<Co
 }
 
 async fn search(State(api): Shared, Path(name): Path<String>, Body(body): Body<Search>) -> Reply {
-    with_collection(&api, name, move |c| {
+    with_read(&api, name, move |c, deadline| {
         let query = leaf_query(c, body.vector, body.text, body.sparse)?;
         let points = c
-            .search(&SearchRequest {
-                query,
-                filter: body.filter,
-                limit: body.limit,
-                offset: body.offset,
-                score_threshold: body.score_threshold,
-                exact: body.exact,
-                hnsw_ef: body.hnsw_ef,
-                with_payload: body.with_payload.0,
-                with_vector: body.with_vector,
-            })
+            .search_until(
+                &SearchRequest {
+                    query,
+                    filter: body.filter,
+                    limit: body.limit,
+                    offset: body.offset,
+                    score_threshold: body.score_threshold,
+                    exact: body.exact,
+                    hnsw_ef: body.hnsw_ef,
+                    with_payload: body.with_payload.0,
+                    with_vector: body.with_vector,
+                },
+                deadline,
+            )
             .map_err(|e| query_error(c, e, "text"))?;
         Ok(Points {
             points: points.into_iter().map(ScoredOut::from).collect(),
@@ -600,7 +648,7 @@ async fn search(State(api): Shared, Path(name): Path<String>, Body(body): Body<S
 }
 
 async fn query(State(api): Shared, Path(name): Path<String>, Body(body): Body<QueryIn>) -> Reply {
-    with_collection(&api, name, move |c| {
+    with_read(&api, name, move |c, deadline| {
         let fusion = match (body.fusion, body.k) {
             (FusionIn::Rrf, k) => Fusion::Rrf {
                 k: k.unwrap_or(DEFAULT_RRF_K),
@@ -628,15 +676,18 @@ async fn query(State(api): Shared, Path(name): Path<String>, Body(body): Body<Qu
             });
         }
         let result = c
-            .query(&FusedRequest {
-                prefetch,
-                fusion,
-                filter: body.filter,
-                limit: body.limit,
-                offset: body.offset,
-                with_payload: body.with_payload.0,
-                with_vector: body.with_vector,
-            })
+            .query_until(
+                &FusedRequest {
+                    prefetch,
+                    fusion,
+                    filter: body.filter,
+                    limit: body.limit,
+                    offset: body.offset,
+                    with_payload: body.with_payload.0,
+                    with_vector: body.with_vector,
+                },
+                deadline,
+            )
             .map_err(|e| query_error(c, e, "text"))?;
         Ok(QueryOut {
             points: result.points.into_iter().map(ScoredOut::from).collect(),

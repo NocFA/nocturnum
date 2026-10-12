@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -11,8 +12,8 @@ use axum::http::Method;
 use axum::middleware::Next;
 use axum::response::Response;
 
-use crate::Api;
 use crate::registry::Registry;
+use crate::{Api, Reads};
 
 /// Latency bucket bounds in seconds.
 const BUCKETS: [f64; 12] = [
@@ -66,7 +67,7 @@ impl Metrics {
     }
 
     /// The metrics in Prometheus text format, reading collection gauges from `registry`.
-    pub(crate) fn render(&self, registry: Option<&Registry>) -> String {
+    pub(crate) fn render(&self, registry: Option<&Registry>, reads: Option<&Reads>) -> String {
         let mut out = String::new();
         let o = &mut out;
         header(
@@ -87,6 +88,39 @@ impl Metrics {
             "1 once collections are loaded.",
         );
         let _ = writeln!(o, "nocturnum_ready {}", u8::from(registry.is_some()));
+
+        if let Some(r) = reads {
+            let lines: [(&str, &str, &str, u64); 4] = [
+                (
+                    "nocturnum_reads_running",
+                    "gauge",
+                    "Read slots taken, by reads running or about to start.",
+                    r.running() as u64,
+                ),
+                (
+                    "nocturnum_reads_limit",
+                    "gauge",
+                    "Point reads allowed to run at once.",
+                    r.limit as u64,
+                ),
+                (
+                    "nocturnum_reads_refused_total",
+                    "counter",
+                    "Point reads refused because no read slot came free in time.",
+                    r.refused.load(Ordering::Relaxed),
+                ),
+                (
+                    "nocturnum_reads_timed_out_total",
+                    "counter",
+                    "Searches and queries stopped by their time limit.",
+                    r.timed_out.load(Ordering::Relaxed),
+                ),
+            ];
+            for (name, kind, help, value) in lines {
+                header(o, name, kind, help);
+                let _ = writeln!(o, "{name} {value}");
+            }
+        }
 
         header(
             o,
@@ -324,7 +358,7 @@ mod tests {
         m.record("GET", "/v1".into(), 200, 0.0005);
         m.record("GET", "/v1".into(), 200, 0.3);
         m.record("POST", "/v1".into(), 404, 30.0);
-        let text = m.render(None);
+        let text = m.render(None, None);
         assert!(text.contains(
             "nocturnum_http_requests_total{method=\"GET\",route=\"/v1\",status=\"200\"} 2"
         ));

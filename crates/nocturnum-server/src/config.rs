@@ -33,6 +33,11 @@ pub struct Server {
     /// Host names to accept while no keys are set, beyond IP addresses and `localhost`, such
     /// as the machine's tailnet name.
     pub allowed_hosts: Vec<String>,
+    /// How many seconds one point read may take, waiting for a read slot included.
+    pub read_timeout_secs: u64,
+    /// How many point reads run at once, one per CPU core when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_reads: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -69,6 +74,8 @@ impl Default for Server {
             port: 6333,
             max_body_bytes: nocturnum_api::DEFAULT_MAX_BODY_BYTES,
             allowed_hosts: Vec::new(),
+            read_timeout_secs: nocturnum_api::DEFAULT_READ_TIMEOUT.as_secs(),
+            max_concurrent_reads: None,
         }
     }
 }
@@ -90,8 +97,12 @@ impl Default for Log {
     }
 }
 
+/// The most point reads allowed at once, kept well under the runtime's 512 blocking threads so
+/// writes, flushes and snapshots always find one free.
+pub const MAX_CONCURRENT_READS: usize = 256;
+
 /// Every table and key the config file knows, the only words a parse error may quote.
-const FIELDS: [&str; 14] = [
+const FIELDS: [&str; 16] = [
     "server",
     "storage",
     "auth",
@@ -100,6 +111,8 @@ const FIELDS: [&str; 14] = [
     "port",
     "max_body_bytes",
     "allowed_hosts",
+    "read_timeout_secs",
+    "max_concurrent_reads",
     "path",
     "snapshots_path",
     "admin_key",
@@ -279,6 +292,16 @@ impl Config {
         if !(1024..=1 << 30).contains(&self.server.max_body_bytes) {
             return Err("server.max_body_bytes must be between 1 KiB and 1 GiB".into());
         }
+        if !(1..=3600).contains(&self.server.read_timeout_secs) {
+            return Err("server.read_timeout_secs must be between 1 and 3600".into());
+        }
+        if let Some(n) = self.server.max_concurrent_reads
+            && !(1..=MAX_CONCURRENT_READS).contains(&n)
+        {
+            return Err(format!(
+                "server.max_concurrent_reads must be between 1 and {MAX_CONCURRENT_READS}"
+            ));
+        }
         if self
             .server
             .allowed_hosts
@@ -377,6 +400,8 @@ mod tests {
             .contains("differ")
         );
         assert!(refused("[server]\nmax_body_bytes = 10\n").contains("max_body_bytes"));
+        assert!(refused("[server]\nread_timeout_secs = 0\n").contains("read_timeout_secs"));
+        assert!(refused("[server]\nmax_concurrent_reads = 0\n").contains("max_concurrent_reads"));
         assert!(refused("[auth]\nadmin_key = \"abcdefghijklmnop\u{e9}\"\n").contains("ASCII"));
         assert!(refused("[auth]\nadmin_key = \"abcdefgh ijklmnop\"\n").contains("ASCII"));
         assert!(refused("[log]\nlevel = \"=bad=\"\n").contains("log.level"));

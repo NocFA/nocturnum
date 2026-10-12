@@ -345,3 +345,42 @@ fn a_prefetch_filter_too_deep_with_the_query_filter_is_refused() {
 fn filter(v: serde_json::Value) -> Filter {
     serde_json::from_value(v).unwrap()
 }
+
+#[test]
+fn a_passed_deadline_stops_every_kind_of_search() {
+    let dir = TempDir::new().unwrap();
+    let c = create(dir.path(), Distance::Dot);
+    c.upsert(
+        (0..20)
+            .map(|i| point(i, [i as f32, 1.0], "fox", 0))
+            .collect(),
+        Ack::Applied,
+    )
+    .unwrap();
+    c.flush().unwrap();
+    c.upsert(vec![point(99, [1.0, 1.0], "fox", 0)], Ack::Applied)
+        .unwrap();
+    let passed = Deadline::from(
+        std::time::Instant::now() - Duration::from_secs(2),
+        Duration::from_secs(1),
+    );
+    let sparse = Query::Sparse(SparseQuery {
+        vector: nocturnum_core::SparseVector {
+            indices: vec![1],
+            values: vec![1.0],
+        },
+        idf: false,
+    });
+    for q in [Query::Vector(vec![1.0, 0.0]), text("fox"), sparse] {
+        let req = SearchRequest::of(q.clone(), 3);
+        assert!(c.search_until(&req, Deadline::NONE).is_ok());
+        let err = c.search_until(&req, passed).unwrap_err();
+        assert!(matches!(err, QueryError::TimedOut(_)), "{err}");
+        let fused = fused(vec![Prefetch::new(q)], Fusion::Dbsf, 3);
+        let err = c.query_until(&fused, passed).unwrap_err();
+        assert!(
+            matches!(&err, QueryError::Prefetch(0, e) if matches!(**e, QueryError::TimedOut(_))),
+            "{err}"
+        );
+    }
+}

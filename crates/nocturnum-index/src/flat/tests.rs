@@ -234,3 +234,32 @@ fn euclid_finds_the_nearest_point() {
 fn a_query_of_the_wrong_dimension_panics() {
     search_rows(Distance::Dot, &[1.0, 2.0], 2, &[1.0], 1, 0..1);
 }
+
+#[test]
+fn an_interrupt_stops_a_long_scan() {
+    let dim = 2;
+    let rows = 3 * INTERRUPT_EVERY as u32;
+    let vectors: Vec<f32> = (0..rows).flat_map(|i| [i as f32, 1.0]).collect();
+    let mut all = roaring::RoaringBitmap::new();
+    all.insert_range(0..rows);
+    let bounds = Bounds {
+        sure: all.clone(),
+        maybe: all,
+    };
+    let mut calls = 0;
+    let got = search_filtered_until(
+        Distance::Dot,
+        &vectors,
+        dim,
+        &[1.0, 0.0],
+        3,
+        &bounds,
+        |_| Ok::<_, &str>(true),
+        || {
+            calls += 1;
+            if calls > 2 { Err("stop") } else { Ok(()) }
+        },
+    );
+    assert_eq!(got, Err("stop"));
+    assert_eq!(calls, 3);
+}

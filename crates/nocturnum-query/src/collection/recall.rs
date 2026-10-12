@@ -11,6 +11,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use nocturnum_core::{Filter, PointId};
 
 use super::{Collection, MAX_HNSW_EF, QueryError, Result, SearchRequest};
+use crate::deadline::Deadline;
 
 /// The most sampled queries one check runs.
 pub const MAX_RECALL_SAMPLES: usize = 1000;
@@ -219,7 +220,7 @@ impl Collection {
                 s.exact = exact;
                 s.hnsw_ef = ef;
                 let start = Instant::now();
-                let hits = self.search_in(&view, &s)?;
+                let hits = self.search_in(&view, &s, Deadline::NONE)?;
                 Ok::<_, QueryError>((
                     hits.into_iter().map(|h| h.id).collect::<Vec<PointId>>(),
                     start.elapsed(),

@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use crate::deadline::Deadline;
 use nocturnum_core::{Filter, PointId, SparseVector};
 use nocturnum_index::text::idf;
 use nocturnum_index::{Scored, TopK};
@@ -27,6 +28,7 @@ pub(super) fn rank(
     q: &SparseQuery,
     filter: Option<&Filter>,
     window: usize,
+    deadline: Deadline,
 ) -> Result<Vec<Scored<PointId>>> {
     let Some(query) = q.vector.clone().prepare()? else {
         return Ok(Vec::new());
@@ -39,7 +41,8 @@ pub(super) fn rank(
     let mut docs = 0u64;
     let mut df = vec![0u64; query.len()];
     let mut recent = Vec::new();
-    for p in view.recent() {
+    for (i, p) in view.recent().enumerate() {
+        deadline.tick(i)?;
         let Some(v) = p.sparse() else { continue };
         docs += 1;
         let shared: Vec<(usize, f32)> = query
@@ -59,6 +62,7 @@ pub(super) fn rank(
     }
     if q.idf {
         for seg in view.segments() {
+            deadline.check()?;
             let ix = seg.sparse_index();
             docs += ix.count(seg.live());
             for (n, &d) in df.iter_mut().zip(&query.indices) {
@@ -87,19 +91,22 @@ pub(super) fn rank(
         top.push(id, score as f32);
     }
     for seg in view.segments() {
+        deadline.check()?;
         let ix = seg.sparse_index();
         let live = seg.live();
         let mut scores: HashMap<u32, f64> = HashMap::new();
         for (&d, &qw) in query.indices.iter().zip(&weights) {
             let Some(p) = ix.postings(d) else { continue };
-            for (&row, &w) in p.rows.iter().zip(&p.weights) {
+            for (n, (&row, &w)) in p.rows.iter().zip(&p.weights).enumerate() {
+                deadline.tick(n)?;
                 if live.contains(row) {
                     *scores.entry(row).or_default() += qw * f64::from(w);
                 }
             }
         }
         let bounds = filter.map(|f| (f, segment_bounds(&seg, Some(f))));
-        for (row, score) in scores {
+        for (n, (row, score)) in scores.into_iter().enumerate() {
+            deadline.tick(n)?;
             let id = seg.point(row).id;
             let score = score as f32;
             if !top.would_keep(&id, score) {

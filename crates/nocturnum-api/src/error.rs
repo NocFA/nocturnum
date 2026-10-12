@@ -80,7 +80,9 @@ impl ApiError {
             }
             QueryError::Input(e) => e.into(),
             QueryError::Storage(e) => ApiError::from_storage(collection.failure(), e),
-            QueryError::TimedOut(message) => ApiError::unavailable(message),
+            QueryError::TimedOut(message) => {
+                ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "timed_out", message)
+            }
         }
     }
 

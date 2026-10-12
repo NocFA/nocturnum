@@ -19,6 +19,14 @@ Settings come from four places, each overriding the one before:
 3. environment variables,
 4. command-line flags.
 
+Point reads, which are search, query, scroll, count, get and recall, each take one of `max_concurrent_reads` slots while they run, and one that finds every slot taken waits for one, so a burst of heavy searches queues up instead of filling the server's 512 worker threads, which leaves room for writes, which never wait for a slot, though reading and parsing a large request body happens before a read takes its slot.
+
+A read's `read_timeout_secs` counts from when its request body has been read, waiting for a slot included:
+
+- a read that never got a slot in that time gets `503 unavailable`, and one whose time ran out just as it got one gets `503 timed_out` without starting,
+- a search or hybrid query still running when the time runs out stops with `503 timed_out`, checking the clock every few thousand points and once more before it answers,
+- scroll, count and get run to the end once started, and recall keeps its own 30 second budget per check.
+
 An unknown key in the file or a value that makes no sense stops the server before it binds, with an error naming the line and the key but never the value, and the effective config is logged at startup with keys shown as `(set)`, or printed with `--print-config`.
 
 ```toml
@@ -27,6 +35,8 @@ host = "127.0.0.1"          # an IP address, never a hostname
 port = 6333
 max_body_bytes = 33554432   # 32 MiB, from 1 KiB to 1 GiB
 allowed_hosts = []          # Host names accepted while no keys are set
+read_timeout_secs = 30      # how long one point read may take, from 1 to 3600
+max_concurrent_reads = 8    # point reads running at once, 1 to 256, one per CPU core when unset
 
 [storage]
 path = "./data"

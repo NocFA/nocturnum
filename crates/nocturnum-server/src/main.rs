@@ -54,6 +54,11 @@ fn serve(config: Config) -> Result<(), String> {
         read_only_key: config.auth.read_only_key.clone(),
         max_body_bytes: config.server.max_body_bytes,
         allowed_hosts: config.server.allowed_hosts.clone(),
+        read_timeout: std::time::Duration::from_secs(config.server.read_timeout_secs),
+        max_concurrent_reads: config
+            .server
+            .max_concurrent_reads
+            .unwrap_or_else(nocturnum_api::default_concurrent_reads),
     });
     let result = runtime.block_on(async {
         let addr = config.addr();

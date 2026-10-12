@@ -19,8 +19,9 @@ pub mod registry;
 mod routes;
 pub mod schedule;
 
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, OnceLock};
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, Request};
@@ -78,6 +79,22 @@ pub struct ApiOptions {
     pub max_body_bytes: usize,
     /// Host names accepted while no keys are set, beyond IP addresses and `localhost`.
     pub allowed_hosts: Vec<String>,
+    /// How long a point read (search, query, scroll, count, get, recall) may wait for a read
+    /// slot, and how long a search or hybrid query may take in all, waiting included, see
+    /// [`ApiOptions::max_concurrent_reads`]. Scroll, count, get and recall run to the end once
+    /// started.
+    pub read_timeout: Duration,
+    /// How many point reads run at once, later ones waiting for a slot, so a burst of heavy
+    /// searches cannot take every thread from writes.
+    pub max_concurrent_reads: usize,
+}
+
+/// How long one point read may take when the config gives no limit.
+pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How many point reads run at once by default: one per CPU core.
+pub fn default_concurrent_reads() -> usize {
+    std::thread::available_parallelism().map_or(4, |n| n.get().min(256))
 }
 
 impl Default for ApiOptions {
@@ -87,7 +104,26 @@ impl Default for ApiOptions {
             read_only_key: None,
             max_body_bytes: DEFAULT_MAX_BODY_BYTES,
             allowed_hosts: Vec::new(),
+            read_timeout: DEFAULT_READ_TIMEOUT,
+            max_concurrent_reads: default_concurrent_reads(),
         }
+    }
+}
+
+/// The slots point reads run in, and what happened to the ones that could not.
+pub(crate) struct Reads {
+    pub(crate) slots: Arc<tokio::sync::Semaphore>,
+    pub(crate) limit: usize,
+    pub(crate) timeout: Duration,
+    /// Reads refused because no slot came free in time.
+    pub(crate) refused: AtomicU64,
+    /// Reads stopped by their time limit.
+    pub(crate) timed_out: AtomicU64,
+}
+
+impl Reads {
+    pub(crate) fn running(&self) -> usize {
+        self.limit - self.slots.available_permits()
     }
 }
 
@@ -100,6 +136,7 @@ pub struct Api {
     scheduler: OnceLock<Scheduler>,
     registry: OnceLock<Arc<Registry>>,
     metrics: metrics::Metrics,
+    pub(crate) reads: Reads,
     started_at: SystemTime,
     started: Instant,
 }
@@ -116,6 +153,15 @@ impl Api {
             scheduler: OnceLock::new(),
             registry: OnceLock::new(),
             metrics: metrics::Metrics::default(),
+            reads: Reads {
+                slots: Arc::new(tokio::sync::Semaphore::new(
+                    options.max_concurrent_reads.max(1),
+                )),
+                limit: options.max_concurrent_reads.max(1),
+                timeout: options.read_timeout,
+                refused: AtomicU64::new(0),
+                timed_out: AtomicU64::new(0),
+            },
             started_at: SystemTime::now(),
             started: Instant::now(),
         })
@@ -128,6 +174,17 @@ impl Api {
         if self.registry.set(registry.clone()).is_ok() {
             let _ = self.scheduler.set(Scheduler::start(registry));
         }
+    }
+
+    /// Takes `n` read slots and holds them until the result is dropped, so tests can fill
+    /// every slot.
+    #[doc(hidden)]
+    pub fn take_read_slots(&self, n: u32) -> tokio::sync::OwnedSemaphorePermit {
+        self.reads
+            .slots
+            .clone()
+            .try_acquire_many_owned(n)
+            .expect("that many read slots are free")
     }
 
     /// The collections, or `503 unavailable` while they are still loading.

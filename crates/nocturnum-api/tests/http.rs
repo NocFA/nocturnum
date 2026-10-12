@@ -1076,6 +1076,99 @@ async fn sparse_vectors_are_stored_searched_and_fused() {
 }
 
 #[tokio::test]
+async fn reads_wait_for_a_slot_and_stop_at_their_time_limit() {
+    let s = start_with(
+        ApiOptions {
+            read_timeout: std::time::Duration::from_millis(300),
+            max_concurrent_reads: 1,
+            ..ApiOptions::default()
+        },
+        true,
+    )
+    .await;
+    s.create("c", 2, "dot").await;
+    let points =
+        json!({"points": [{"id": 1, "vector": [1.0, 0.0]}, {"id": 2, "vector": [0.0, 1.0]}]});
+    assert_eq!(
+        s.put("/v1/collections/c/points", points).await.0,
+        StatusCode::OK
+    );
+    let search = json!({"vector": [1.0, 0.0], "limit": 1});
+
+    // With every slot taken a read waits out its limit and is refused, while writes go on.
+    let held = s.api.take_read_slots(1);
+    let (status, v) = s
+        .post("/v1/collections/c/points/search", search.clone())
+        .await;
+    assert_eq!(
+        (status, code(&v)),
+        (StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
+        "{v}"
+    );
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("1 reads were already running")
+    );
+    let write = json!({"points": [{"id": 3, "vector": [1.0, 1.0]}]});
+    assert_eq!(
+        s.put("/v1/collections/c/points", write).await.0,
+        StatusCode::OK
+    );
+    drop(held);
+    let (status, v) = s.post("/v1/collections/c/points/search", search).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(ids(&v), [json!(1)]);
+
+    // A limit that has already run out stops a search with its own code.
+    let s = start_with(
+        ApiOptions {
+            read_timeout: std::time::Duration::from_nanos(1),
+            ..ApiOptions::default()
+        },
+        true,
+    )
+    .await;
+    s.create("c", 2, "dot").await;
+    let (status, v) = s
+        .post(
+            "/v1/collections/c/points/search",
+            json!({"vector": [1.0, 0.0]}),
+        )
+        .await;
+    assert_eq!(
+        (status, code(&v)),
+        (StatusCode::SERVICE_UNAVAILABLE, "timed_out"),
+        "{v}"
+    );
+    let (status, v) = s
+        .post(
+            "/v1/collections/c/points/query",
+            json!({"prefetch": [{"vector": [1.0, 0.0]}]}),
+        )
+        .await;
+    assert_eq!(
+        (status, code(&v)),
+        (StatusCode::SERVICE_UNAVAILABLE, "timed_out"),
+        "{v}"
+    );
+    let metrics = s
+        .request(Method::GET, "/metrics")
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        metrics.contains("nocturnum_reads_timed_out_total 2"),
+        "{metrics}"
+    );
+    assert!(metrics.contains("nocturnum_reads_running 0"), "{metrics}");
+}
+
+#[tokio::test]
 async fn snapshots_download_and_restore() {
     let s = start().await;
     s.create("c", 2, "dot").await;

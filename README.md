@@ -23,9 +23,9 @@ Think of a self-hosted take on [Qdrant](https://qdrant.tech/), rebuilt from scra
 - **Backups:** snapshots with checksums that restore while the server keeps running, and a cron schedule per collection that keeps the newest N.
 - **Search quality:** a recall check that runs graph search against exact search at several beam widths, so you can see what a faster setting costs.
 - **Access:** admin and read-only keys, loopback by default, and protection against DNS rebinding and cross-site requests when no keys are set.
-- **Operations:** `/livez`, `/readyz`, Prometheus `/metrics`, engine status per collection and a clean shutdown on SIGINT or SIGTERM.
+- **Operations:** `/livez`, `/readyz`, Prometheus `/metrics`, engine status per collection, a time limit on searches and a cap on reads running at once, so a burst of searches leaves threads free for writes, and a clean shutdown on SIGINT or SIGTERM.
 
-The engine, the REST server and the console run end to end, with 301 tests passing on macOS and Linux, crash tests included.
+The engine, the REST server and the console run end to end, with 305 tests passing on macOS and Linux, crash tests included.
 
 The console comes with the binary on the same port, for browsing collections, points and payloads, running queries, checking search quality, taking, restoring and scheduling snapshots, watching the engine work and setting keys, with `j` and `k` stepping through points beside their JSON.
 

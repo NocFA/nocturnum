@@ -205,7 +205,23 @@ pub fn search_filtered<E>(
     query: &[f32],
     k: usize,
     bounds: &Bounds,
+    check: impl FnMut(u32) -> Result<bool, E>,
+) -> Result<Vec<Scored<u32>>, E> {
+    search_filtered_until(distance, vectors, dim, query, k, bounds, check, || Ok(()))
+}
+
+/// [`search_filtered`], calling `interrupt` every [`INTERRUPT_EVERY`] rows, so a caller with
+/// a time limit can stop a long scan by returning an error from it.
+#[allow(clippy::too_many_arguments)]
+pub fn search_filtered_until<E>(
+    distance: Distance,
+    vectors: &[f32],
+    dim: usize,
+    query: &[f32],
+    k: usize,
+    bounds: &Bounds,
     mut check: impl FnMut(u32) -> Result<bool, E>,
+    mut interrupt: impl FnMut() -> Result<(), E>,
 ) -> Result<Vec<Scored<u32>>, E> {
     assert_eq!(query.len(), dim, "the query has the wrong dimension");
     assert!(dim > 0, "vectors have at least one dimension");
@@ -213,7 +229,10 @@ pub fn search_filtered<E>(
     if k == 0 {
         return Ok(Vec::new());
     }
-    for row in &bounds.maybe {
+    for (i, row) in bounds.maybe.iter().enumerate() {
+        if i % INTERRUPT_EVERY == 0 {
+            interrupt()?;
+        }
         let start = row as usize * dim;
         let score = distance.score(query, &vectors[start..start + dim]);
         if top.would_keep(&row, score) && (bounds.sure.contains(row) || check(row)?) {
@@ -222,6 +241,9 @@ pub fn search_filtered<E>(
     }
     Ok(top.into_sorted_vec())
 }
+
+/// How many rows [`search_filtered_until`] scores between calls to its `interrupt`.
+pub const INTERRUPT_EVERY: usize = 4096;
 
 #[cfg(test)]
 mod tests;

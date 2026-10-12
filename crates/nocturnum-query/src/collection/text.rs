@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+use crate::deadline::Deadline;
 use nocturnum_core::filter::field_values;
 use nocturnum_core::{Filter, JsonPath, PayloadIndexKind, PayloadIndexSpec, PointId};
 use nocturnum_index::text::{document, idf, query_terms};
@@ -32,6 +33,7 @@ pub(super) fn rank(
     q: &TextQuery,
     filter: Option<&Filter>,
     window: usize,
+    deadline: Deadline,
 ) -> Result<Vec<Scored<PointId>>> {
     q.bm25.validate().map_err(QueryError::Invalid)?;
     if !has_text_index(view.payload_indexes(), &q.field) {
@@ -47,7 +49,8 @@ pub(super) fn rank(
     let mut total_len = 0u64;
     let mut df = vec![0u64; terms.len()];
     let mut recent = Vec::new();
-    for p in view.recent() {
+    for (i, p) in view.recent().enumerate() {
+        deadline.tick(i)?;
         let payload = p.payload()?;
         let (counts, len) = document(&field_values(&q.field, &payload.0));
         if len == 0 {
@@ -80,6 +83,7 @@ pub(super) fn rank(
         })
         .collect();
     for (seg, text) in &segments {
+        deadline.check()?;
         let (d, len) = text.stats(seg.live());
         docs += d;
         total_len += len;
@@ -104,13 +108,15 @@ pub(super) fn rank(
         top.push(id, score as f32);
     }
     for (seg, text) in &segments {
+        deadline.check()?;
         let live = seg.live();
         let mut scores: HashMap<u32, f64> = HashMap::new();
         for (term, &idf) in terms.iter().zip(&idfs) {
             let Some(p) = text.postings(term) else {
                 continue;
             };
-            for (&row, &tf) in p.rows.iter().zip(&p.tfs) {
+            for (n, (&row, &tf)) in p.rows.iter().zip(&p.tfs).enumerate() {
+                deadline.tick(n)?;
                 if live.contains(row) {
                     *scores.entry(row).or_default() +=
                         q.bm25.term(idf, tf, text.len_of(row), avg_len);
@@ -118,7 +124,8 @@ pub(super) fn rank(
             }
         }
         let bounds = filter.map(|f| (f, segment_bounds(seg, Some(f))));
-        for (row, score) in scores {
+        for (n, (row, score)) in scores.into_iter().enumerate() {
+            deadline.tick(n)?;
             let id = seg.point(row).id;
             let score = score as f32;
             if !top.would_keep(&id, score) {
