@@ -30,7 +30,8 @@ use std::sync::Arc;
 
 use nocturnum_core::payload::PathStep;
 use nocturnum_core::{
-    Ack, Condition, Distance, Filter, JsonPath, Payload, PayloadIndexSpec, PointId, VectorConfig,
+    Ack, Condition, Distance, Filter, JsonPath, Payload, PayloadIndexSpec, PointId, SparseVector,
+    VectorConfig,
 };
 use nocturnum_index::flat::search_filtered;
 
@@ -146,6 +147,8 @@ pub struct Point {
     pub id: PointId,
     pub payload: Option<Payload>,
     pub vector: Option<Vec<f32>>,
+    /// With the vector, when the point has a sparse vector.
+    pub sparse: Option<SparseVector>,
 }
 
 /// A search result.
@@ -157,6 +160,8 @@ pub struct ScoredPoint {
     pub score: f32,
     pub payload: Option<Payload>,
     pub vector: Option<Vec<f32>>,
+    /// With the vector, when the point has a sparse vector.
+    pub sparse: Option<SparseVector>,
 }
 
 /// What a search ranks points by.
@@ -166,6 +171,8 @@ pub enum Query {
     Vector(Vec<f32>),
     /// BM25 relevance to some words, over a field with a text index.
     Text(TextQuery),
+    /// The dot product with a sparse vector, over the points that have one.
+    Sparse(SparseQuery),
 }
 
 /// A text search, see `nocturnum_index::text` for how it scores.
@@ -476,6 +483,7 @@ impl Collection {
                 out.push(Point {
                     id: *id,
                     payload: project(&rec.payload, with_payload),
+                    sparse: rec.sparse.filter(|_| with_vector),
                     vector: with_vector.then_some(rec.vector),
                 });
             }
@@ -532,6 +540,7 @@ impl Collection {
             points.push(Point {
                 id,
                 payload: project(&rec.payload, &req.with_payload),
+                sparse: rec.sparse.filter(|_| req.with_vector),
                 vector: req.with_vector.then_some(rec.vector),
             });
         }
@@ -658,7 +667,8 @@ impl Collection {
                     Scale::Distance(distance),
                 )
             }
-            Query::Text(q) => (text::rank(view, q, leaf.filter, leaf.limit)?, Scale::Bm25),
+            Query::Text(q) => (text::rank(view, q, leaf.filter, leaf.limit)?, Scale::Raw),
+            Query::Sparse(q) => (sparse::rank(view, q, leaf.filter, leaf.limit)?, Scale::Raw),
         };
         if let Some(t) = leaf.score_threshold {
             // Hits come best first, so the ones failing the threshold are all at the end.
@@ -850,8 +860,8 @@ fn scored(
     with_payload: &WithPayload,
     with_vector: bool,
 ) -> Result<ScoredPoint> {
-    let (payload, vector) = if *with_payload == WithPayload::None && !with_vector {
-        (None, None)
+    let (payload, vector, sparse) = if *with_payload == WithPayload::None && !with_vector {
+        (None, None, None)
     } else {
         let rec = view
             .get(id)?
@@ -859,10 +869,12 @@ fn scored(
         (
             project(&rec.payload, with_payload),
             with_vector.then_some(rec.vector),
+            rec.sparse.filter(|_| with_vector),
         )
     };
     Ok(ScoredPoint {
         id,
+        sparse,
         score,
         payload,
         vector,
@@ -873,21 +885,22 @@ fn scored(
 #[derive(Debug, Clone, Copy)]
 enum Scale {
     Distance(Distance),
-    Bm25,
+    /// Scores the API reports as they are, higher is better: BM25 and sparse dot products.
+    Raw,
 }
 
 impl Scale {
     fn to_user(self, score: f32) -> f32 {
         match self {
             Scale::Distance(d) => d.to_user(score),
-            Scale::Bm25 => score,
+            Scale::Raw => score,
         }
     }
 
     fn higher_is_better(self) -> bool {
         match self {
             Scale::Distance(d) => d.user_higher_is_better(),
-            Scale::Bm25 => true,
+            Scale::Raw => true,
         }
     }
 
@@ -1055,8 +1068,11 @@ fn remove(map: &mut Map<String, Value>, path: &[&str]) {
 #[cfg(test)]
 mod fused_tests;
 mod recall;
+mod sparse;
 #[cfg(test)]
 mod tests;
 mod text;
+
+pub use sparse::SparseQuery;
 
 pub use text::MAX_QUERY_TERMS;

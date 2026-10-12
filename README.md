@@ -16,7 +16,8 @@ Think of a self-hosted take on [Qdrant](https://qdrant.tech/), rebuilt from scra
 
 - **Search:** exact search for small or tightly filtered sets and HNSW graphs for large ones, with filters planned against payload indexes.
 - **Text search:** BM25 keyword ranking over a payload field, with its statistics counted over the live collection on every query, so they never go stale.
-- **Hybrid search:** one query runs vector and text searches together and fuses their rankings with reciprocal rank or score-distribution fusion, reporting how many candidates each search found.
+- **Sparse vectors:** an optional sparse vector per point, such as SPLADE output, searched by dot product with optional IDF weighting.
+- **Hybrid search:** one query runs vector, text and sparse searches together and fuses their rankings with reciprocal rank or score-distribution fusion, reporting how many candidates each search found.
 - **Filters:** `must`, `should`, `must_not` and `min_should`, with match, any, except, range, null and emptiness checks, value counts, ids and nested arrays, and keyword, integer, float and bool payload indexes to speed them up, plus text indexes for keyword ranking.
 - **Durability:** each point write says how sure the answer has to be, durable on disk by default, with crash tests that kill the process mid-write behind every level and power-loss tests still to come.
 - **Backups:** snapshots with checksums that restore while the server keeps running, and a cron schedule per collection that keeps the newest N.
@@ -24,7 +25,7 @@ Think of a self-hosted take on [Qdrant](https://qdrant.tech/), rebuilt from scra
 - **Access:** admin and read-only keys, loopback by default, and protection against DNS rebinding and cross-site requests when no keys are set.
 - **Operations:** `/livez`, `/readyz`, Prometheus `/metrics`, engine status per collection and a clean shutdown on SIGINT or SIGTERM.
 
-The engine, the REST server and the console run end to end, with 289 tests passing on macOS and Linux, crash tests included.
+The engine, the REST server and the console run end to end, with 301 tests passing on macOS and Linux, crash tests included.
 
 The console comes with the binary on the same port, for browsing collections, points and payloads, running queries, checking search quality, taking, restoring and scheduling snapshots, watching the engine work and setting keys, with `j` and `k` stepping through points beside their JSON.
 
@@ -50,10 +51,11 @@ That makes it the store behind agent memory, search over your notes, bookmarks o
 
 A **collection** is a named set of points that all share one vector size and one distance metric.
 
-A **point** has an id, a vector and a payload:
+A **point** has an id, a vector, optionally a sparse vector, and a payload:
 
 - the **id** is an unsigned 64-bit integer or a UUID,
 - the **vector** is a list of floats of the collection's size,
+- an optional **sparse vector** holds a few weighted dimensions out of a very large space, as `indices` and `values`,
 - the **payload** is any JSON object up to 64 levels deep, used for filtering and returned with results.
 
 **Distance** is one of `cosine`, `dot`, `euclid` or `manhattan`.
@@ -385,7 +387,7 @@ Qdrant's Apache-2.0 source was read to understand how it works, and nocturnum's 
 ## Roadmap
 
 1. gRPC on port 6334, over the same operations as REST.
-2. Sparse vectors, scalar quantization, optional TLS and OpenAPI docs.
+2. Scalar quantization, named vectors, optional TLS and OpenAPI docs.
 3. Snapshots sent to S3-compatible storage.
 4. Benchmarks and power-loss tests on real hardware.
 5. Cluster and log views in the console, once the engine has clustering and a log endpoint.

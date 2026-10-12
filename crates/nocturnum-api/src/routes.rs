@@ -9,12 +9,12 @@ use axum::extract::{Extension, Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
-use nocturnum_core::{PayloadIndexSpec, PointId, VectorConfig};
+use nocturnum_core::{PayloadIndexSpec, PointId, SparseVector, VectorConfig};
 use nocturnum_query::collection::MAX_RESULT_WINDOW;
 use nocturnum_query::fusion::DEFAULT_RRF_K;
 use nocturnum_query::{
     Bm25, Collection, FusedRequest, Fusion, Prefetch, Query, QueryError, RecallRequest,
-    ScrollRequest, SearchRequest, TextQuery, WithPayload,
+    ScrollRequest, SearchRequest, SparseQuery, TextQuery, WithPayload,
 };
 use nocturnum_storage::{Job, PointWrite};
 use serde::Serialize;
@@ -364,9 +364,16 @@ async fn upsert(
             p.payload
                 .validate()
                 .map_err(|e| ApiError::from(e).at(format!("points[{i}].payload")))?;
+            let sparse = match p.sparse {
+                None => None,
+                Some(v) => v
+                    .prepare()
+                    .map_err(|e| ApiError::from(e).at(format!("points[{i}].sparse")))?,
+            };
             points.push(PointWrite {
                 id: p.id,
                 vector: p.vector,
+                sparse,
                 payload: p.payload,
             });
         }
@@ -571,7 +578,7 @@ async fn count(State(api): Shared, Path(name): Path<String>, Body(body): Body<Co
 
 async fn search(State(api): Shared, Path(name): Path<String>, Body(body): Body<Search>) -> Reply {
     with_collection(&api, name, move |c| {
-        let query = leaf_query(c, body.vector, body.text)?;
+        let query = leaf_query(c, body.vector, body.text, body.sparse)?;
         let points = c
             .search(&SearchRequest {
                 query,
@@ -609,7 +616,7 @@ async fn query(State(api): Shared, Path(name): Path<String>, Body(body): Body<Qu
         let mut prefetch = Vec::with_capacity(body.prefetch.len());
         for (i, p) in body.prefetch.into_iter().enumerate() {
             let at = format!("prefetch[{i}]");
-            let query = leaf_query(c, p.vector, p.text).map_err(|e| e.within(&at))?;
+            let query = leaf_query(c, p.vector, p.text, p.sparse).map_err(|e| e.within(&at))?;
             prefetch.push(Prefetch {
                 query,
                 filter: p.filter,
@@ -647,23 +654,36 @@ async fn query(State(api): Shared, Path(name): Path<String>, Body(body): Body<Qu
     .await
 }
 
-/// What a search ranks by, from exactly one of its `vector` and `text`.
+/// What a search ranks by, from exactly one of its `vector`, `text` and `sparse`.
 fn leaf_query(
     c: &Collection,
     vector: Option<Vec<f32>>,
     text: Option<TextIn>,
+    sparse: Option<SparseIn>,
 ) -> Result<Query, ApiError> {
-    match (vector, text) {
-        (Some(vector), None) => {
+    match (vector, text, sparse) {
+        (Some(vector), None, None) => {
             let VectorConfig { dim, distance } = c.config();
             distance
                 .check(dim, &vector)
                 .map_err(|e| ApiError::from(e).at("vector"))?;
             Ok(Query::Vector(vector))
         }
-        (None, Some(text)) => Ok(Query::Text(text_query(text, "text")?)),
+        (None, Some(text), None) => Ok(Query::Text(text_query(text, "text")?)),
+        (None, None, Some(s)) => {
+            let vector = SparseVector {
+                indices: s.indices,
+                values: s.values,
+            };
+            // Checked here so the error points at it, the engine prepares it again.
+            vector
+                .clone()
+                .prepare()
+                .map_err(|e| ApiError::from(e).at("sparse"))?;
+            Ok(Query::Sparse(SparseQuery { vector, idf: s.idf }))
+        }
         _ => Err(ApiError::invalid(
-            "a search needs exactly one of vector and text",
+            "a search needs exactly one of vector, text and sparse",
         )),
     }
 }

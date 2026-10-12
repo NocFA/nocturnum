@@ -16,11 +16,16 @@
 //! | 4 | overwrite payload | ids, `u32` length, payload JSON |
 //! | 5 | delete payload keys | ids, `u32` count, then per key: `u32` length, UTF-8 |
 //! | 6 | clear payload | ids |
+//! | 7 | upsert with sparse vectors | as tag 1, with each point's sparse vector after its dense one: a `u8`, `0` for none or `1` then a `u32` count and that many `u32` dimensions followed by as many `f32` weights |
+//!
+//! An upsert is written with tag 1 when none of its points has a sparse vector, so logs from
+//! collections that never use them read the same as before tag 7 existed.
 //!
 //! "ids" is a `u32` count followed by that many ids, and an id is a tag byte, `0` then a `u64`
 //! for a number or `1` then 16 bytes for a UUID.
 
-use nocturnum_core::{Payload, PointId};
+use nocturnum_core::sparse::MAX_SPARSE_LEN;
+use nocturnum_core::{Payload, PointId, SparseVector};
 use uuid::Uuid;
 
 /// One point to insert or replace whole.
@@ -29,6 +34,8 @@ pub struct PointWrite {
     pub id: PointId,
     /// Already checked and prepared for the collection's distance (unit length for cosine).
     pub vector: Vec<f32>,
+    /// Already prepared, see [`SparseVector::prepare`].
+    pub sparse: Option<SparseVector>,
     pub payload: Payload,
 }
 
@@ -60,13 +67,29 @@ impl Operation {
         let mut out = Vec::new();
         match self {
             Operation::Upsert(points) => {
-                out.push(1);
+                let sparse = points.iter().any(|p| p.sparse.is_some());
+                out.push(if sparse { 7 } else { 1 });
                 put_u32(&mut out, points.len());
                 for p in points {
                     put_id(&mut out, p.id);
                     put_u32(&mut out, p.vector.len());
                     for x in &p.vector {
                         out.extend_from_slice(&x.to_le_bytes());
+                    }
+                    if sparse {
+                        match &p.sparse {
+                            None => out.push(0),
+                            Some(v) => {
+                                out.push(1);
+                                put_u32(&mut out, v.indices.len());
+                                for i in &v.indices {
+                                    out.extend_from_slice(&i.to_le_bytes());
+                                }
+                                for x in &v.values {
+                                    out.extend_from_slice(&x.to_le_bytes());
+                                }
+                            }
+                        }
                     }
                     put_payload(&mut out, &p.payload);
                 }
@@ -105,23 +128,20 @@ impl Operation {
     pub fn decode(bytes: &[u8]) -> Result<Operation, DecodeError> {
         let mut r = Reader { bytes, at: 0 };
         let op = match r.u8()? {
-            1 => {
-                let n = r.count(1 + 8 + 4 + 4)?;
+            tag @ (1 | 7) => {
+                let sparse = tag == 7;
+                let n = r.count(1 + 8 + 4 + 4 + usize::from(sparse))?;
                 let mut points = Vec::with_capacity(n);
                 for _ in 0..n {
                     let id = r.id()?;
                     let dim = r.count(4)?;
-                    let raw = r.take(dim * 4)?;
-                    let vector = raw
-                        .as_chunks::<4>()
-                        .0
-                        .iter()
-                        .map(|c| f32::from_le_bytes(*c))
-                        .collect();
+                    let vector = r.floats(dim)?;
+                    let sparse = if sparse { r.sparse()? } else { None };
                     let payload = r.payload()?;
                     points.push(PointWrite {
                         id,
                         vector,
+                        sparse,
                         payload,
                     });
                 }
@@ -231,6 +251,47 @@ impl<'a> Reader<'a> {
         Ok(n)
     }
 
+    fn floats(&mut self, n: usize) -> Result<Vec<f32>, DecodeError> {
+        Ok(self
+            .take(n * 4)?
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
+            .collect())
+    }
+
+    fn sparse(&mut self) -> Result<Option<SparseVector>, DecodeError> {
+        match self.u8()? {
+            0 => Ok(None),
+            1 => {
+                let n = self.count(8)?;
+                if n == 0 || n > MAX_SPARSE_LEN {
+                    return Err(DecodeError(format!(
+                        "a sparse vector of {n} dimensions, outside 1 to {MAX_SPARSE_LEN}"
+                    )));
+                }
+                let indices: Vec<u32> = self
+                    .take(n * 4)?
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|c| u32::from_le_bytes(*c))
+                    .collect();
+                let values = self.floats(n)?;
+                // Only prepared vectors are logged, so anything else is damage.
+                if indices.windows(2).any(|w| w[0] >= w[1]) || values.iter().any(|v| !v.is_finite())
+                {
+                    return Err(DecodeError(
+                        "a sparse vector is out of order or holds a non-finite weight".into(),
+                    ));
+                }
+                Ok(Some(SparseVector { indices, values }))
+            }
+            tag => Err(DecodeError(format!("unknown sparse vector tag {tag}"))),
+        }
+    }
+
     fn id(&mut self) -> Result<PointId, DecodeError> {
         match self.u8()? {
             0 => Ok(PointId::Num(u64::from_le_bytes(
@@ -271,11 +332,30 @@ mod tests {
                 PointWrite {
                     id: PointId::Num(u64::MAX),
                     vector: vec![1.5, -0.0, f32::MIN_POSITIVE],
+                    sparse: None,
                     payload: payload(json!({"a": [1, "x", null], "b": {"c": true}})),
                 },
                 PointWrite {
                     id: uuid,
                     vector: vec![],
+                    sparse: None,
+                    payload: Payload::new(),
+                },
+            ]),
+            Operation::Upsert(vec![
+                PointWrite {
+                    id: PointId::Num(4),
+                    vector: vec![0.5],
+                    sparse: Some(SparseVector {
+                        indices: vec![3, 70_000, u32::MAX],
+                        values: vec![0.25, -1.5, f32::MAX],
+                    }),
+                    payload: payload(json!({"t": "x"})),
+                },
+                PointWrite {
+                    id: uuid,
+                    vector: vec![0.0],
+                    sparse: None,
                     payload: Payload::new(),
                 },
             ]),
@@ -317,6 +397,51 @@ mod tests {
             let mut longer = bytes.clone();
             longer.push(0);
             assert!(Operation::decode(&longer).is_err());
+        }
+    }
+
+    #[test]
+    fn upserts_without_sparse_vectors_keep_the_old_tag() {
+        let plain = Operation::Upsert(vec![PointWrite {
+            id: PointId::Num(1),
+            vector: vec![1.0],
+            sparse: None,
+            payload: Payload::new(),
+        }]);
+        assert_eq!(plain.encode()[0], 1);
+        let Operation::Upsert(mut points) = plain else {
+            unreachable!()
+        };
+        points[0].sparse = Some(SparseVector {
+            indices: vec![1],
+            values: vec![1.0],
+        });
+        assert_eq!(Operation::Upsert(points).encode()[0], 7);
+    }
+
+    #[test]
+    fn sparse_vectors_not_in_their_prepared_form_are_damage() {
+        let write = |indices: Vec<u32>, values: Vec<f32>| {
+            Operation::Upsert(vec![PointWrite {
+                id: PointId::Num(1),
+                vector: vec![],
+                sparse: Some(SparseVector { indices, values }),
+                payload: Payload::new(),
+            }])
+            .encode()
+        };
+        assert!(Operation::decode(&write(vec![2, 9], vec![1.0, 2.0])).is_ok());
+        for bad in [
+            write(vec![9, 2], vec![1.0, 2.0]),
+            write(vec![2, 2], vec![1.0, 2.0]),
+            write(vec![2], vec![f32::NAN]),
+            write(vec![], vec![]),
+            write(
+                (0..=MAX_SPARSE_LEN as u32).collect(),
+                vec![1.0; MAX_SPARSE_LEN + 1],
+            ),
+        ] {
+            assert!(Operation::decode(&bad).is_err());
         }
     }
 

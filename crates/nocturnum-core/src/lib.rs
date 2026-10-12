@@ -6,6 +6,7 @@ pub mod error;
 pub mod filter;
 pub mod id;
 pub mod payload;
+pub mod sparse;
 pub mod vector;
 
 pub use ack::Ack;
@@ -14,4 +15,5 @@ pub use error::{Error, Result};
 pub use filter::{Condition, FieldCondition, Filter, MatchValue, Range};
 pub use id::PointId;
 pub use payload::{JsonPath, Payload};
+pub use sparse::SparseVector;
 pub use vector::{DenseVector, Distance};

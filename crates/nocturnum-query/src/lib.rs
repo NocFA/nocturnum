@@ -7,7 +7,7 @@ pub mod plan;
 pub use collection::{
     Candidates, Collection, FusedRequest, FusedResult, Point, Prefetch, Query, QueryError,
     RecallReport, RecallRequest, RecallRun, ScoredPoint, ScrollPage, ScrollRequest, SearchRequest,
-    Selector, TextQuery, WithPayload,
+    Selector, SparseQuery, TextQuery, WithPayload,
 };
 pub use fusion::Fusion;
 pub use nocturnum_index::text::Bm25;

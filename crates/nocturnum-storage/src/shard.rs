@@ -58,8 +58,8 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuar
 use std::time::Duration;
 
 use imbl::OrdMap;
-use nocturnum_core::{Ack, Payload, PayloadIndexSpec, PointId, VectorConfig};
-use nocturnum_index::{Hnsw, PayloadIndex};
+use nocturnum_core::{Ack, Payload, PayloadIndexSpec, PointId, SparseVector, VectorConfig};
+use nocturnum_index::{Hnsw, PayloadIndex, SparseIndex};
 use roaring::RoaringBitmap;
 
 use crate::crash::crash_point;
@@ -67,7 +67,7 @@ use crate::error::{Error, IoContext, Result};
 use crate::manifest::Manifest;
 use crate::op::{Operation, PointWrite};
 use crate::segment::{
-    Entry, EntryIn, GraphOptions, PayloadIn, Segment, segment_dir_name, write_segment,
+    Entry, EntryIn, GraphOptions, PayloadIn, Segment, SparseIn, segment_dir_name, write_segment,
 };
 use crate::sync::{create_dir_all_durable, sync_dir};
 use crate::wal::{PeriodicSync, Wal, WalOptions};
@@ -100,6 +100,7 @@ impl Default for ShardOptions {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Record {
     pub vector: Vec<f32>,
+    pub sparse: Option<SparseVector>,
     pub payload: Payload,
 }
 
@@ -138,6 +139,8 @@ struct Slot {
     /// Each row's entry, by row.
     rows: Arc<[Entry]>,
     payload_index: Arc<PayloadIndex>,
+    /// The segment's sparse vectors inverted, empty when it has none.
+    sparse_index: Arc<SparseIndex>,
 }
 
 impl Slot {
@@ -145,11 +148,20 @@ impl Slot {
     fn new(segment: Arc<Segment>, indexes: &[PayloadIndexSpec]) -> Result<Slot> {
         let rows = segment_rows(&segment);
         let payload_index = Arc::new(build_payload_index(&segment, &rows, indexes)?);
+        let mut sparse_index = SparseIndex::default();
+        if segment.has_sparse() {
+            for row in 0..rows.len() as u32 {
+                if let Some(v) = segment.sparse(row) {
+                    sparse_index.add(row, &v);
+                }
+            }
+        }
         Ok(Slot {
             segment,
             live: Arc::new(RoaringBitmap::new()),
             rows: rows.into(),
             payload_index,
+            sparse_index: Arc::new(sparse_index),
         })
     }
 
@@ -247,6 +259,7 @@ impl State {
                     .expect("the index only points at loaded segments");
                 Ok(Some(Record {
                     vector: slot.segment.vector(row).to_vec(),
+                    sparse: slot.segment.sparse(row),
                     payload: slot.segment.payload(row)?,
                 }))
             }
@@ -265,6 +278,7 @@ impl State {
                         p.id,
                         Some(Record {
                             vector: p.vector.clone(),
+                            sparse: p.sparse.clone(),
                             payload: p.payload.clone(),
                         }),
                     ));
@@ -619,12 +633,15 @@ impl Shard {
             _ => {}
         }
         if let Operation::Upsert(points) = &mut op {
-            for PointWrite { vector, .. } in points.iter_mut() {
+            for PointWrite { vector, sparse, .. } in points.iter_mut() {
                 *vector = self
                     .config
                     .distance
                     .prepare(self.config.dim, std::mem::take(vector))
                     .map_err(WriteError::Invalid)?;
+                if let Some(v) = sparse.take() {
+                    *sparse = v.prepare().map_err(WriteError::Invalid)?;
+                }
             }
         }
         Ok(op)
@@ -749,6 +766,11 @@ impl Shard {
                 .value
                 .as_ref()
                 .map(|r| (r.vector.as_slice(), PayloadIn::Value(&r.payload))),
+            sparse: e
+                .value
+                .as_ref()
+                .and_then(|r| r.sparse.as_ref())
+                .map(SparseIn::Value),
         });
         write_segment(
             &seg_root.join(format!("tmp-{seg_id:016x}")),
@@ -931,6 +953,12 @@ pub struct PointRef<'a> {
     pub version: u64,
     pub vector: &'a [f32],
     payload: PayloadRef<'a>,
+    sparse: SparseRef<'a>,
+}
+
+enum SparseRef<'a> {
+    Memory(Option<&'a SparseVector>),
+    Segment(&'a Segment, u32),
 }
 
 enum PayloadRef<'a> {
@@ -943,6 +971,14 @@ impl PointRef<'_> {
         match self.payload {
             PayloadRef::Memory(p) => Ok(Cow::Borrowed(p)),
             PayloadRef::Segment(seg, row) => seg.payload(row).map(Cow::Owned),
+        }
+    }
+
+    /// The point's sparse vector, if it has one.
+    pub fn sparse(&self) -> Option<Cow<'_, SparseVector>> {
+        match self.sparse {
+            SparseRef::Memory(v) => v.map(Cow::Borrowed),
+            SparseRef::Segment(seg, row) => seg.sparse(row).map(Cow::Owned),
         }
     }
 }
@@ -962,6 +998,7 @@ fn recent_points<'a>(
             version: e.version,
             vector: &rec.vector,
             payload: PayloadRef::Memory(&rec.payload),
+            sparse: SparseRef::Memory(rec.sparse.as_ref()),
         })
     })
 }
@@ -1000,11 +1037,17 @@ impl<'a> SegmentView<'a> {
             version: e.version,
             vector: self.slot.segment.vector(row),
             payload: PayloadRef::Segment(&self.slot.segment, row),
+            sparse: SparseRef::Segment(&self.slot.segment, row),
         }
     }
 
     pub fn payload_index(&self) -> &'a PayloadIndex {
         &self.slot.payload_index
+    }
+
+    /// The segment's sparse vectors, inverted.
+    pub fn sparse_index(&self) -> &'a SparseIndex {
+        &self.slot.sparse_index
     }
 
     /// The segment's graph index, if it was big enough to get one.
@@ -1040,6 +1083,7 @@ impl View {
             {
                 return Ok(Some(Record {
                     vector: slot.segment.vector(row).to_vec(),
+                    sparse: slot.segment.sparse(row),
                     payload: slot.segment.payload(row)?,
                 }));
             }

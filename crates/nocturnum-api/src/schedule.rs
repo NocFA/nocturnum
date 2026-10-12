@@ -635,6 +635,7 @@ mod tests {
                 vec![PointWrite {
                     id: 1.into(),
                     vector: vec![1.0, 0.0],
+                    sparse: None,
                     payload: Default::default(),
                 }],
                 Ack::Durable,

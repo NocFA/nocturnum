@@ -50,6 +50,7 @@ fn write(id: u64, p: Value) -> PointWrite {
     PointWrite {
         id: PointId::Num(id),
         vector: vec![0.0, 0.0],
+        sparse: None,
         payload: serde_json::from_value(p).unwrap(),
     }
 }

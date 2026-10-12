@@ -52,7 +52,7 @@ A mutation check was done by hand when the harness was written: with recovery's 
 
 `crates/nocturnum-storage/tests/shard_crash.rs` covers the whole shard, the memtable, flushes, segments, the manifest and recovery, which [`../decisions/0002-storage-layout.md`](../decisions/0002-storage-layout.md) describes.
 
-A child process applies a deterministic stream of mixed operations (upserts, deletes and every payload change) from one thread with `durable` acknowledgements, flushing every 25 operations, and the parent regenerates the same stream. Because one writer only starts an operation after the previous one was acknowledged, the reopened shard must hold exactly the result of every acknowledged operation, or of those plus the one in flight, and the test checks that point by point.
+A child process applies a deterministic stream of mixed operations (upserts, half their points carrying a sparse vector, deletes, and setting, deleting and clearing payload keys) from one thread with `durable` acknowledgements, flushing every 25 operations, and the parent regenerates the same stream. Because one writer only starts an operation after the previous one was acknowledged, the reopened shard must hold exactly the result of every acknowledged operation, or of those plus the one in flight, and the test checks that point by point.
 
 It runs 20 random kills on one shard directory, which checks 400 to 500 acknowledged operations, and kills the child at every step of a flush:
 
@@ -150,7 +150,7 @@ Scheduled runs use the same `snapshot` and `prune` as above, and the scheduler's
 - a second handle on the same directory is refused,
 - a property test runs random appends, syncs, reopens and truncations against an in-memory model.
 
-The segment and manifest tests flip every single bit of every file and check that loading refuses each one, and the shard's property test runs random writes, flushes and reopens against a plain in-memory model.
+The segment and manifest tests flip one bit in every byte of every file, the sparse files included, and check that loading refuses each one, and the shard's property test runs random writes, flushes and reopens against a plain in-memory model.
 
 ## What these tests do not prove
 

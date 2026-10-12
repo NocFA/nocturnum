@@ -15,7 +15,7 @@ use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use nocturnum_core::{Ack, Distance, Payload, PointId, VectorConfig};
+use nocturnum_core::{Ack, Distance, Payload, PointId, SparseVector, VectorConfig};
 use nocturnum_storage::shard::{prune, restore, snapshot_name};
 use nocturnum_storage::{
     GraphOptions, Operation, OptimizerOptions, PointWrite, Record, Shard, ShardOptions, WalOptions,
@@ -95,6 +95,12 @@ fn operation(run: u64, counter: u64) -> Operation {
                 .map(|_| PointWrite {
                     id: id(&mut r),
                     vector: (0..4).map(|i| (counter * 4 + i) as f32 * 0.25).collect(),
+                    // Half the points carry a sparse vector, already in its prepared form,
+                    // so the log's tag 7 and segments' sparse files go through every crash.
+                    sparse: (r.below(2) == 0).then(|| SparseVector {
+                        indices: vec![(counter % 7) as u32, 7 + (counter % 5) as u32],
+                        values: vec![counter as f32 * 0.5, -1.0],
+                    }),
                     payload: payload(&mut r),
                 })
                 .collect(),
@@ -121,6 +127,7 @@ fn apply(model: &mut BTreeMap<PointId, Record>, op: &Operation) {
                     p.id,
                     Record {
                         vector: p.vector.clone(),
+                        sparse: p.sparse.clone(),
                         payload: p.payload.clone(),
                     },
                 );
@@ -292,6 +299,7 @@ fn contents(shard: &Shard) -> BTreeMap<PointId, Record> {
                 p.id,
                 Record {
                     vector: p.vector.to_vec(),
+                    sparse: p.sparse().map(|v| v.into_owned()),
                     payload: p.payload().unwrap().into_owned(),
                 },
             )

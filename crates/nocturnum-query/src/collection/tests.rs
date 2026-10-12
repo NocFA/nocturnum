@@ -45,6 +45,7 @@ fn point(id: u64, vector: [f32; 2], p: Value) -> PointWrite {
     PointWrite {
         id: PointId::Num(id),
         vector: vector.to_vec(),
+        sparse: None,
         payload: payload(p),
     }
 }
@@ -430,6 +431,7 @@ fn search_walks_segment_graphs_when_the_planner_says_so() {
                 PointWrite {
                     id: PointId::Num(id),
                     vector: (0..16).map(|_| next()).collect(),
+                    sparse: None,
                     payload: payload(json!({"half": id % 2 == 0})),
                 }
             })

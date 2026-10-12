@@ -867,6 +867,7 @@ mod tests {
                 vec![nocturnum_storage::PointWrite {
                     id: 1.into(),
                     vector: vec![1.0, 0.0],
+                    sparse: None,
                     payload: Default::default(),
                 }],
                 nocturnum_core::Ack::Durable,

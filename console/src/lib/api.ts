@@ -91,10 +91,16 @@ export interface MergeProgress {
 	graph_done: number;
 }
 
+export interface SparseVector {
+	indices: number[];
+	values: number[];
+}
+
 export interface Point {
 	id: PointId;
 	payload?: Payload;
 	vector?: number[];
+	sparse?: SparseVector;
 }
 
 export interface Scored extends Point {

@@ -1001,6 +1001,81 @@ async fn hybrid_queries_fuse_vector_and_text_searches() {
 }
 
 #[tokio::test]
+async fn sparse_vectors_are_stored_searched_and_fused() {
+    let s = start().await;
+    s.create("c", 2, "dot").await;
+    let points = json!({"points": [
+        {"id": 1, "vector": [1.0, 0.0], "sparse": {"indices": [7, 2], "values": [1.0, 0.5]}},
+        {"id": 2, "vector": [0.0, 1.0], "sparse": {"indices": [2, 3], "values": [2.0, 1.0]}},
+        {"id": 3, "vector": [1.0, 1.0]}
+    ]});
+    let (status, v) = s.put("/v1/collections/c/points", points).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+
+    // Read back sorted, and only with the vector.
+    let v = s
+        .ok(
+            Method::GET,
+            "/v1/collections/c/points/1?with_vector=true",
+            None,
+        )
+        .await;
+    assert_eq!(
+        v["sparse"],
+        json!({"indices": [2, 7], "values": [0.5, 1.0]})
+    );
+    let v = s.ok(Method::GET, "/v1/collections/c/points/1", None).await;
+    assert!(v.get("sparse").is_none(), "{v}");
+
+    let search = |body: Value| async { s.post("/v1/collections/c/points/search", body).await };
+    let (status, v) = search(json!({"sparse": {"indices": [2, 7], "values": [1.0, 2.0]}})).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(ids(&v), [json!(1), json!(2)]);
+    assert_eq!(v["points"][0]["score"], 2.5);
+    let (_, v) = search(
+        json!({"sparse": {"indices": [2], "values": [1.0], "idf": true}, "with_vector": true}),
+    )
+    .await;
+    assert_eq!(ids(&v), [json!(2), json!(1)]);
+    assert_eq!(v["points"][0]["sparse"]["indices"], json!([2, 3]));
+
+    let (status, v) = s
+        .post(
+            "/v1/collections/c/points/query",
+            json!({"prefetch": [
+                {"vector": [0.0, 1.0]},
+                {"sparse": {"indices": [7], "values": [1.0]}}
+            ], "limit": 2}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(
+        v["candidates"]["sources"][1],
+        json!({"limit": 2, "found": 1})
+    );
+
+    let bad = StatusCode::BAD_REQUEST;
+    let (status, v) = s
+        .put(
+            "/v1/collections/c/points",
+            json!({"points": [{"id": 4, "vector": [1.0, 0.0], "sparse": {"indices": [1, 1], "values": [1.0, 2.0]}}]}),
+        )
+        .await;
+    assert_eq!(
+        (status, code(&v), v["error"]["at"].as_str()),
+        (bad, "invalid_vector", Some("points[0].sparse"))
+    );
+    let (status, v) = search(json!({"sparse": {"indices": [1], "values": []}})).await;
+    assert_eq!(
+        (status, code(&v), v["error"]["at"].as_str()),
+        (bad, "invalid_vector", Some("sparse"))
+    );
+    let (status, v) =
+        search(json!({"vector": [1.0, 0.0], "sparse": {"indices": [1], "values": [1.0]}})).await;
+    assert_eq!((status, code(&v)), (bad, "invalid_request"));
+}
+
+#[tokio::test]
 async fn snapshots_download_and_restore() {
     let s = start().await;
     s.create("c", 2, "dot").await;
@@ -1298,6 +1373,7 @@ fn upsert_one(r: &Registry, name: &str, id: u64) {
         vec![nocturnum_storage::PointWrite {
             id: id.into(),
             vector: vec![1.0, 0.0],
+            sparse: None,
             payload: Default::default(),
         }],
         nocturnum_core::Ack::Durable,

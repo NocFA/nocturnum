@@ -4,9 +4,11 @@
 pub mod flat;
 pub mod hnsw;
 pub mod payload;
+pub mod sparse;
 pub mod text;
 
 pub use flat::{Scored, TopK};
 pub use hnsw::{Hnsw, HnswConfig};
 pub use payload::{Bounds, PayloadIndex};
+pub use sparse::SparseIndex;
 pub use text::{Bm25, TextIndex};

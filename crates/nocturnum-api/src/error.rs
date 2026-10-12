@@ -122,7 +122,10 @@ impl From<nocturnum_core::Error> for ApiError {
         use nocturnum_core::Error as E;
         let message = e.to_string();
         match e {
-            E::DimensionMismatch { .. } | E::NonFiniteVector { .. } | E::ZeroVector => {
+            E::DimensionMismatch { .. }
+            | E::NonFiniteVector { .. }
+            | E::ZeroVector
+            | E::InvalidSparse(_) => {
                 ApiError::new(StatusCode::BAD_REQUEST, "invalid_vector", message)
             }
             E::InvalidFilter { at, reason } => {

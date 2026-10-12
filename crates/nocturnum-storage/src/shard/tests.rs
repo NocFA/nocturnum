@@ -48,6 +48,7 @@ fn point(id: u64, x: f32, p: serde_json::Value) -> PointWrite {
     PointWrite {
         id: PointId::Num(id),
         vector: vec![x, x + 1.0, x + 2.0],
+        sparse: None,
         payload: payload(p),
     }
 }
@@ -69,6 +70,7 @@ fn view_contents(view: &View) -> BTreeMap<PointId, Record> {
     for p in view.points() {
         let rec = Record {
             vector: p.vector.to_vec(),
+            sparse: p.sparse().map(|v| v.into_owned()),
             payload: p.payload().unwrap().into_owned(),
         };
         assert!(out.insert(p.id, rec).is_none(), "{} seen twice", p.id);
@@ -178,6 +180,7 @@ fn invalid_vectors_are_refused_before_logging() {
             Operation::Upsert(vec![PointWrite {
                 id: PointId::Num(1),
                 vector: vec![1.0],
+                sparse: None,
                 payload: Payload::new(),
             }]),
             Ack::Durable,
@@ -201,6 +204,7 @@ fn cosine_vectors_are_stored_normalised() {
             Operation::Upsert(vec![PointWrite {
                 id: PointId::Num(1),
                 vector: vec![3.0, 4.0],
+                sparse: None,
                 payload: Payload::new(),
             }]),
             Ack::Durable,
@@ -1447,6 +1451,7 @@ fn apply_model(model: &mut BTreeMap<PointId, Record>, op: &Operation) {
                     p.id,
                     Record {
                         vector: p.vector.clone(),
+                        sparse: p.sparse.clone(),
                         payload: p.payload.clone(),
                     },
                 );
@@ -1501,13 +1506,26 @@ fn small_payload() -> impl Strategy<Value = Payload> {
         .prop_map(|m| Payload(m.into_iter().map(|(k, v)| (k, json!(v))).collect()))
 }
 
+/// A sparse vector in its prepared form half the time, none otherwise.
+fn small_sparse() -> impl Strategy<Value = Option<SparseVector>> {
+    proptest::option::of(
+        proptest::collection::btree_map(0u32..40, -2.0f32..2.0, 1..5).prop_map(|m| SparseVector {
+            indices: m.keys().copied().collect(),
+            values: m.values().copied().collect(),
+        }),
+    )
+}
+
 fn step() -> impl Strategy<Value = Step> {
     let write = proptest::collection::vec(
-        (0u64..12, -4.0f32..4.0, small_payload()).prop_map(|(id, x, payload)| PointWrite {
-            id: PointId::Num(id),
-            vector: vec![x, -x, x * 0.5],
-            payload,
-        }),
+        (0u64..12, -4.0f32..4.0, small_payload(), small_sparse()).prop_map(
+            |(id, x, payload, sparse)| PointWrite {
+                id: PointId::Num(id),
+                vector: vec![x, -x, x * 0.5],
+                sparse,
+                payload,
+            },
+        ),
         0..4,
     );
     prop_oneof![

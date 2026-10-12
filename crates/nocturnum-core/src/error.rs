@@ -12,6 +12,9 @@ pub enum Error {
     #[error("a zero vector has no direction, so it cannot be used with cosine distance")]
     ZeroVector,
 
+    #[error("invalid sparse vector: {0}")]
+    InvalidSparse(String),
+
     #[error("invalid json path {path:?}: {reason}")]
     InvalidPath { path: String, reason: String },
 

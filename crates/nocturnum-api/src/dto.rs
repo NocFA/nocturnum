@@ -1,6 +1,8 @@
 //! Request and response bodies, as `docs/api/v1.md` describes them.
 
-use nocturnum_core::{Ack, Filter, JsonPath, Payload, PayloadIndexSpec, PointId, VectorConfig};
+use nocturnum_core::{
+    Ack, Filter, JsonPath, Payload, PayloadIndexSpec, PointId, SparseVector, VectorConfig,
+};
 use nocturnum_query::{Point, ScoredPoint, Selector, WithPayload};
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -119,6 +121,7 @@ pub struct Upsert {
 pub struct PointIn {
     pub id: PointId,
     pub vector: Vec<f32>,
+    pub sparse: Option<SparseVector>,
     #[serde(default)]
     pub payload: Payload,
 }
@@ -249,9 +252,10 @@ pub struct Count {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Search {
-    /// Exactly one of `vector` and `text` says what to rank by.
+    /// Exactly one of `vector`, `text` and `sparse` says what to rank by.
     pub vector: Option<Vec<f32>>,
     pub text: Option<TextIn>,
+    pub sparse: Option<SparseIn>,
     pub filter: Option<Filter>,
     #[serde(default = "ten")]
     pub limit: usize,
@@ -299,9 +303,10 @@ pub enum FusionIn {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrefetchIn {
-    /// Exactly one of `vector` and `text` says what to rank by.
+    /// Exactly one of `vector`, `text` and `sparse` says what to rank by.
     pub vector: Option<Vec<f32>>,
     pub text: Option<TextIn>,
+    pub sparse: Option<SparseIn>,
     pub filter: Option<Filter>,
     pub limit: Option<usize>,
     pub score_threshold: Option<f32>,
@@ -329,6 +334,16 @@ pub struct SourceOut {
     pub found: usize,
 }
 
+/// A sparse search's vector, and whether to weigh its dimensions by rarity.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SparseIn {
+    pub indices: Vec<u32>,
+    pub values: Vec<f32>,
+    #[serde(default)]
+    pub idf: bool,
+}
+
 /// A text search's words and BM25 knobs.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -347,6 +362,8 @@ pub struct PointOut {
     pub payload: Option<Payload>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vector: Option<Vec<f32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sparse: Option<SparseVector>,
 }
 
 impl From<Point> for PointOut {
@@ -355,6 +372,7 @@ impl From<Point> for PointOut {
             id: p.id,
             payload: p.payload,
             vector: p.vector,
+            sparse: p.sparse,
         }
     }
 }
@@ -368,6 +386,8 @@ pub struct ScoredOut {
     pub payload: Option<Payload>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vector: Option<Vec<f32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sparse: Option<SparseVector>,
 }
 
 impl From<ScoredPoint> for ScoredOut {
@@ -377,6 +397,7 @@ impl From<ScoredPoint> for ScoredOut {
             score: p.score,
             payload: p.payload,
             vector: p.vector,
+            sparse: p.sparse,
         }
     }
 }
@@ -412,6 +433,7 @@ mod tests {
                 id: PointId::Num(n),
                 payload: None,
                 vector: None,
+                sparse: None,
             })
             .unwrap()
         };

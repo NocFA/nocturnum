@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use std::sync::atomic::AtomicU64;
 
 use super::*;
-use crate::segment::{BuildProgress, PayloadIn, write_segment_counted};
+use crate::segment::{BuildProgress, PayloadIn, SparseIn, write_segment_counted};
 
 /// What [`Shard::optimize_once`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -465,12 +465,16 @@ pub(super) fn merged_entries<'a>(
                     input.segment.vector(row),
                     PayloadIn::Json(input.segment.payload_bytes(row)),
                 )),
+                sparse: Some(input.segment.sparse_pairs(row))
+                    .filter(|p| !p.is_empty())
+                    .map(SparseIn::Pairs),
             }),
             None if from_oldest => None,
             None => Some(EntryIn {
                 id,
                 version: e.version,
                 value: None,
+                sparse: None,
             }),
         }
     })
