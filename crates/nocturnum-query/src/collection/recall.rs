@@ -176,8 +176,8 @@ impl Collection {
                 .sum();
             let mut picked: Vec<Vec<f32>> = Vec::with_capacity(req.samples);
             for (seen, p) in view.points().enumerate() {
-                // The view blocks writes, so a scan that runs long gives up rather than
-                // holding them back past the budget.
+                // A scan that runs long gives up, so one request cannot hold a thread past
+                // the budget.
                 if seen % 4096 == 4095 && out_of_time() {
                     return Err(timed_out());
                 }
@@ -211,7 +211,7 @@ impl Collection {
             }
             ran += 1;
             // One view for the sample's searches, so a write in between cannot make exact
-            // and graph search disagree. It holds writes back while they run.
+            // and graph search disagree.
             let view = self.shard.view();
             let search = |exact: bool, ef: Option<usize>| {
                 let mut s = SearchRequest::new(q.clone(), req.limit);

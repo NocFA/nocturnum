@@ -429,7 +429,7 @@ impl Collection {
 
     /// [`Collection::search`] against a view the caller holds, so several searches can see
     /// the same points.
-    fn search_in(&self, view: &View<'_>, req: &SearchRequest) -> Result<Vec<ScoredPoint>> {
+    fn search_in(&self, view: &View, req: &SearchRequest) -> Result<Vec<ScoredPoint>> {
         let window = req.offset.saturating_add(req.limit);
         if window > MAX_RESULT_WINDOW {
             return Err(QueryError::Invalid(format!(
@@ -590,7 +590,7 @@ fn point_matches(p: &PointRef<'_>, filter: Option<&Filter>) -> nocturnum_storage
 
 /// The `n` smallest ids above `after` that match `filter`, in order.
 fn smallest_matching(
-    view: &View<'_>,
+    view: &View,
     filter: Option<&Filter>,
     after: Option<PointId>,
     n: usize,

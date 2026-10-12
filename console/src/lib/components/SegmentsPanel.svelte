@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { CollectionView } from '#lib/collection.svelte.ts';
-	import { bytes, int, percent } from '#lib/format.ts';
+	import { bytes, int, mergeStage, percent } from '#lib/format.ts';
 	import Icon from './Icon.svelte';
 
 	let { view }: { view: CollectionView } = $props();
@@ -30,7 +30,7 @@
 					{over === 1 ? '1 segment' : `${over} segments`} over the vacuum threshold
 				</span>
 			{:else if status?.optimizer.running}
-				<span class="flag idle"><Icon name="restore" size={12} />rewriting {status.optimizer.running.join(', ')}</span>
+				<span class="flag idle"><Icon name="restore" size={12} />rewriting {status.optimizer.running.join(', ')}{#if status.optimizer.progress}, {mergeStage(status.optimizer.progress)}{/if}</span>
 			{/if}
 		</div>
 	</div>

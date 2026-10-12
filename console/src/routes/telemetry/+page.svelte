@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { api, ApiError, type CollectionStatus } from '#lib/api.ts';
 	import { app, toasts } from '#lib/state.svelte.ts';
-	import { bytes, duration, int, ms, percent, utc, own } from '#lib/format.ts';
+	import { bytes, duration, int, mergeStage, ms, percent, utc, own } from '#lib/format.ts';
 	import { byCollection, parse, routes, type RouteStats } from '#lib/prom.ts';
 	import Icon from '#lib/components/Icon.svelte';
 	import { Streams } from '#lib/streams.ts';
@@ -73,7 +73,10 @@
 	function job(s: CollectionStatus) {
 		const j = s.optimizer.last;
 		if (s.optimizer.last_error) return 'failed';
-		if (s.optimizer.running) return `rewriting ${s.optimizer.running.join(', ')}`;
+		if (s.optimizer.running) {
+			const stage = mergeStage(s.optimizer.progress);
+			return `rewriting ${s.optimizer.running.join(', ')}${stage ? `, ${stage}` : ''}`;
+		}
 		if (!j) return 'none yet';
 		if (j.kind === 'flush') return 'flush';
 		if (j.kind === 'vacuum') return `vacuum ${j.inputs?.[0]}`;

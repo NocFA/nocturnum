@@ -41,6 +41,7 @@
 
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Mutex, RwLock};
 
 use nocturnum_core::Distance;
@@ -549,13 +550,28 @@ impl Hnsw {
     /// Builds a graph over `vectors`, `dim` floats per row, inserting in parallel after the
     /// first few hundred rows.
     pub fn build(distance: Distance, vectors: &[f32], dim: usize, config: HnswConfig) -> Hnsw {
+        Self::build_counted(distance, vectors, dim, config, &AtomicU64::new(0))
+    }
+
+    /// Like [`Hnsw::build`], adding one to `inserted` as each row joins the graph, so another
+    /// thread can watch a long build. Each addition is a release, so a reader that loads
+    /// `inserted` with acquire also sees whatever the caller stored before the build.
+    pub fn build_counted(
+        distance: Distance,
+        vectors: &[f32],
+        dim: usize,
+        config: HnswConfig,
+        inserted: &AtomicU64,
+    ) -> Hnsw {
         let builder = Self::builder(distance, vectors, dim, config);
         let n = builder.levels.len() as u32;
         let seed = (SERIAL_SEED as u32).min(n);
-        (0..seed).for_each(|node| builder.insert(node));
-        (seed..n)
-            .into_par_iter()
-            .for_each(|node| builder.insert(node));
+        let insert = |node| {
+            builder.insert(node);
+            inserted.fetch_add(1, AtomicOrdering::Release);
+        };
+        (0..seed).for_each(insert);
+        (seed..n).into_par_iter().for_each(insert);
         builder.finish()
     }
 

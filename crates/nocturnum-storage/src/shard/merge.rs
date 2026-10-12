@@ -12,9 +12,10 @@
 //! segments after the run.
 
 use std::collections::BTreeSet;
+use std::sync::atomic::AtomicU64;
 
 use super::*;
-use crate::segment::PayloadIn;
+use crate::segment::{BuildProgress, PayloadIn, write_segment_counted};
 
 /// What [`Shard::optimize_once`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,16 +59,85 @@ impl Default for OptimizerOptions {
 pub struct OptimizerStatus {
     /// The segments being rewritten right now.
     pub running: Option<Vec<u64>>,
+    /// How far that rewrite has got, `None` when nothing is running.
+    pub progress: Option<MergeProgress>,
     /// The last job that finished.
     pub last: Option<Job>,
     /// Why the last attempt failed, cleared by the next success.
     pub last_error: Option<String>,
 }
 
+/// How far a running merge has got. It copies the inputs' entries first, then builds the new
+/// segment's graph when it is big enough to get one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MergeProgress {
+    /// The inputs' entries, deletions included.
+    pub entries: u64,
+    /// Entries read so far, each copied or dropped.
+    pub entries_done: u64,
+    /// Rows the new graph will hold, 0 until building it starts and for a segment small
+    /// enough to scan whole.
+    pub graph_rows: u64,
+    /// Rows inserted into the graph so far.
+    pub graph_done: u64,
+}
+
+/// The counters behind [`MergeProgress`], which the merge updates as it goes, see
+/// [`BuildProgress`] for how they stay in step.
+#[derive(Default)]
+pub(super) struct Counters {
+    entries: u64,
+    entries_done: AtomicU64,
+    build: BuildProgress,
+}
+
+impl Counters {
+    /// Counts one input entry read.
+    fn entry_read(&self) {
+        let _done = self.entries_done.fetch_add(1, Ordering::Release) + 1;
+        #[cfg(test)]
+        if _done == self.entries / 2
+            && let Some(checkpoint) = &self.build.checkpoint
+        {
+            checkpoint("copying");
+        }
+    }
+
+    pub(super) fn read(&self) -> MergeProgress {
+        // The reverse of the order they are written in: entries are all read before the
+        // graph's size is stored, which comes before any row is inserted.
+        let graph_done = self.build.graph_done.load(Ordering::Acquire);
+        let graph_rows = self.build.graph_rows.load(Ordering::Acquire);
+        let entries_done = self.entries_done.load(Ordering::Acquire);
+        MergeProgress {
+            entries: self.entries,
+            entries_done,
+            graph_rows,
+            graph_done,
+        }
+    }
+}
+
+/// The optimizer's status, with the running merge's live counters.
+#[derive(Default)]
+pub(super) struct OptimizerState {
+    status: OptimizerStatus,
+    counters: Option<Arc<Counters>>,
+}
+
 /// One input to a merge: a segment and the rows it can leave out.
-struct Input {
-    segment: Arc<Segment>,
+pub(super) struct Input {
+    pub(super) segment: Arc<Segment>,
     droppable: RoaringBitmap,
+}
+
+impl Input {
+    pub(super) fn of(state: &State, slot: &Slot) -> Input {
+        Input {
+            segment: slot.segment.clone(),
+            droppable: droppable(state, slot),
+        }
+    }
 }
 
 /// Rows of `slot` a rewrite can leave out: dead rows whose point's newest state is already in a
@@ -80,10 +150,19 @@ struct Input {
 fn droppable(state: &State, slot: &Slot) -> RoaringBitmap {
     let mut dead = RoaringBitmap::new();
     dead.insert_range(0..slot.rows.len() as u32);
-    dead -= &slot.live;
+    dead -= &*slot.live;
     dead.iter()
         .filter(|&row| state.index.get(&slot.rows[row as usize].id) != Some(&Loc::Recent))
         .collect()
+}
+
+/// What a merge read from the shard when it started.
+struct Run {
+    inputs: Vec<Input>,
+    /// Whether the run starts at the oldest segment, so deletions can go.
+    from_oldest: bool,
+    /// The last write applied when the inputs' droppable rows were worked out.
+    seen_upto: u64,
 }
 
 impl Shard {
@@ -98,28 +177,25 @@ impl Shard {
 
         // Rows that are dead now stay dead, newer copies never get older, so they can be
         // dropped. Rows that die while the merge builds are written and left dead.
-        let (inputs, from_oldest, seen_upto) = {
+        let run = {
             let state = read(&self.state);
             let start = state
                 .slots
                 .iter()
                 .position(|s| s.segment.id() == ids[0])
                 .ok_or_else(|| invalid(format!("segment {} is not live", ids[0])))?;
-            let run = state
+            let slots = state
                 .slots
                 .get(start..start + ids.len())
                 .filter(|run| run.iter().map(|s| s.segment.id()).eq(ids.iter().copied()))
                 .ok_or_else(|| invalid(format!("segments {ids:?} are not adjacent and live")))?;
-            let inputs: Vec<Input> = run
-                .iter()
-                .map(|s| Input {
-                    segment: s.segment.clone(),
-                    droppable: droppable(&state, s),
-                })
-                .collect();
-            (inputs, start == 0, state.last_applied)
+            Run {
+                inputs: slots.iter().map(|s| Input::of(&state, s)).collect(),
+                from_oldest: start == 0,
+                seen_upto: state.last_applied,
+            }
         };
-        self.check_disk(&inputs)?;
+        self.check_disk(&run.inputs)?;
 
         let output = {
             let mut manifest = lock(&self.flush);
@@ -129,16 +205,22 @@ impl Shard {
             manifest.next_segment_id += 1;
             id
         };
-        self.set_running(Some(ids.to_vec()));
+        let counters = Arc::new(Counters {
+            entries: run
+                .inputs
+                .iter()
+                .map(|i| i.segment.entries().len() as u64)
+                .sum(),
+            entries_done: AtomicU64::new(0),
+            build: BuildProgress {
+                #[cfg(test)]
+                checkpoint: lock(&self.checkpoint).clone(),
+                ..BuildProgress::default()
+            },
+        });
+        self.set_running(Some((ids.to_vec(), counters.clone())));
         let mut publishing = false;
-        let result = self.build_and_publish(
-            ids,
-            &inputs,
-            from_oldest,
-            seen_upto,
-            output,
-            &mut publishing,
-        );
+        let result = self.build_and_publish(ids, &run, output, &counters, &mut publishing);
         self.set_running(None);
         if result.is_err() && !publishing {
             // Nothing lists the output yet, so it goes now rather than holding disk space
@@ -154,10 +236,9 @@ impl Shard {
     fn build_and_publish(
         &self,
         ids: &[u64],
-        inputs: &[Input],
-        from_oldest: bool,
-        seen_upto: u64,
+        run: &Run,
         output: u64,
+        counters: &Counters,
         publishing: &mut bool,
     ) -> Result<()> {
         let seg_root = self.dir.join("segments");
@@ -166,13 +247,14 @@ impl Shard {
         if dest.exists() {
             fs::remove_dir_all(&dest).ctx(|| format!("removing {}", dest.display()))?;
         }
-        write_segment(
+        write_segment_counted(
             &seg_root.join(format!("tmp-{output:016x}")),
             &dest,
             output,
             self.config,
             Some(&self.opts.graph),
-            merged_entries(inputs, from_oldest),
+            merged_entries(&run.inputs, run.from_oldest, counters),
+            &counters.build,
         )?;
         let segment = Arc::new(Segment::open(&dest, output, self.config)?);
         let indexes = lock(&self.flush).payload_indexes.clone();
@@ -197,7 +279,7 @@ impl Shard {
             // Rows were dropped because writes up to `seen_upto` hid them, and some of those
             // may sit in the WAL unsynced, such as an `applied` deletion. They have to be on
             // disk before the rows they replace leave it.
-            self.wal.sync_to(seen_upto)?;
+            self.wal.sync_to(run.seen_upto)?;
             *publishing = true;
             if let Err(e) = next.write(&self.dir) {
                 self.flush_broken.store(true, Ordering::Release);
@@ -258,12 +340,19 @@ impl Shard {
         }
     }
 
-    fn set_running(&self, running: Option<Vec<u64>>) {
-        lock(&self.optimizer_status).running = running;
+    fn set_running(&self, running: Option<(Vec<u64>, Arc<Counters>)>) {
+        let mut state = lock(&self.optimizer);
+        let (ids, counters) = running.unzip();
+        state.status.running = ids;
+        state.counters = counters;
     }
 
     pub fn optimizer_status(&self) -> OptimizerStatus {
-        lock(&self.optimizer_status).clone()
+        let state = lock(&self.optimizer);
+        OptimizerStatus {
+            progress: state.counters.as_ref().map(|c| c.read()),
+            ..state.status.clone()
+        }
     }
 
     /// Does the most useful piece of upkeep, if any: a flush when the memtable is full, a
@@ -271,7 +360,7 @@ impl Shard {
     /// too many segments.
     pub fn optimize_once(&self, options: &OptimizerOptions) -> Result<Option<Job>> {
         let result = self.choose_and_run(options);
-        let mut status = lock(&self.optimizer_status);
+        let status = &mut lock(&self.optimizer).status;
         match &result {
             Ok(Some(job)) => {
                 status.last = Some(job.clone());
@@ -339,7 +428,13 @@ impl Shard {
 
 /// Each id's newest entry across the inputs, in id order, leaving out rows that were dead when
 /// the merge started and, when the inputs start at the oldest segment, deletions.
-fn merged_entries(inputs: &[Input], from_oldest: bool) -> impl Iterator<Item = EntryIn<'_>> {
+///
+/// Counts every input entry it passes in `counters`, copied or not.
+pub(super) fn merged_entries<'a>(
+    inputs: &'a [Input],
+    from_oldest: bool,
+    counters: &'a Counters,
+) -> impl Iterator<Item = EntryIn<'a>> {
     // Every input is sorted by id, so walking the union of ids in order and looking each up
     // in the newest input first keeps memory to the id set.
     let ids: BTreeSet<PointId> = inputs
@@ -354,6 +449,7 @@ fn merged_entries(inputs: &[Input], from_oldest: bool) -> impl Iterator<Item = E
             if entries.get(cursors[k]).is_some_and(|e| e.id == id) {
                 newest = Some((k, entries[cursors[k]]));
                 cursors[k] += 1;
+                counters.entry_read();
             }
         }
         let (k, e) = newest.expect("every id comes from some input");

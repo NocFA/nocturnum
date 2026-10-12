@@ -24,7 +24,7 @@ Keeping the mutable layer in RAM and letting the WAL be its only durable form re
 - **Memory:** the memtable holds unflushed points in RAM, bounded by `ShardOptions::flush_bytes` (32 MiB by default), which suits the homelab target.
 - **Startup time:** recovery replays at most one memtable's worth of WAL.
 - **Segment count:** every flush adds a segment, so the optimizer (`crates/nocturnum-storage/src/shard/merge.rs`) merges adjacent segments past a limit of 8 and rewrites any with more than 20% of their rows droppable, building aside and swapping through the manifest like a flush.
-- **Writes block during long reads:** a read view holds the shard's read lock, so a long scan delays writers. That is acceptable for v1, and the optimizer task can move readers onto snapshots of the segment list.
+- **Reads take a snapshot (2026-10-12):** a read view used to hold the shard's read lock, so a long scan delayed writers. A view now holds no lock: the memtable is a persistent map (`imbl::OrdMap`) and each segment's live rows sit behind an `Arc`, so a view is a cheap copy of the shard at one moment and a write landing meanwhile copies only what it changes. A view still reading segments that a merge replaced keeps their mapped files, and their disk space, until it is dropped.
 
 ## Invariants the code relies on
 

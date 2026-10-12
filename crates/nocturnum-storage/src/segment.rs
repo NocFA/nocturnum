@@ -24,6 +24,7 @@ compile_error!("segment files store little-endian floats and are memory mapped a
 use std::fs::{self, File};
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use memmap2::Mmap;
 use nocturnum_core::{Payload, PointId, VectorConfig};
@@ -114,6 +115,22 @@ pub fn segment_dir_name(id: u64) -> String {
     format!("seg-{id:016x}")
 }
 
+/// Counters a segment build updates as it runs, for progress reports.
+///
+/// Every update is a release and a reader loads with acquire in the reverse order of the
+/// updates, so what it reads is never ahead of what came before it: rows inserted never pass
+/// the rows the graph holds.
+#[derive(Default)]
+pub(crate) struct BuildProgress {
+    /// Rows the graph will hold, 0 until building it starts, and for a segment without one.
+    pub(crate) graph_rows: AtomicU64,
+    /// Rows inserted into the graph so far.
+    pub(crate) graph_done: AtomicU64,
+    /// Called at fixed moments of a build, so a test can look at the counters mid-merge.
+    #[cfg(test)]
+    pub(crate) checkpoint: Option<crate::shard::Checkpoint>,
+}
+
 /// Writes a segment from entries sorted by id, building it in `tmp` and renaming it to
 /// `dest` once everything is on disk.
 pub(crate) fn write_segment<'a>(
@@ -123,6 +140,20 @@ pub(crate) fn write_segment<'a>(
     vectors: VectorConfig,
     graph: Option<&GraphOptions>,
     entries: impl IntoIterator<Item = EntryIn<'a>>,
+) -> Result<()> {
+    let progress = BuildProgress::default();
+    write_segment_counted(tmp, dest, id, vectors, graph, entries, &progress)
+}
+
+/// Like [`write_segment`], reporting how far the graph has got in `progress`.
+pub(crate) fn write_segment_counted<'a>(
+    tmp: &Path,
+    dest: &Path,
+    id: u64,
+    vectors: VectorConfig,
+    graph: Option<&GraphOptions>,
+    entries: impl IntoIterator<Item = EntryIn<'a>>,
+    progress: &BuildProgress,
 ) -> Result<()> {
     let dim = vectors.dim;
     if tmp.exists() {
@@ -211,7 +242,14 @@ pub(crate) fn write_segment<'a>(
     if let (Some(g), Some(all)) = (graph, all_vectors)
         && all.len().saturating_mul(4) >= g.min_bytes
     {
-        let hnsw = Hnsw::build(vectors.distance, &all, dim, g.config);
+        progress
+            .graph_rows
+            .store((all.len() / dim) as u64, Ordering::Release);
+        #[cfg(test)]
+        if let Some(checkpoint) = &progress.checkpoint {
+            checkpoint("indexing");
+        }
+        let hnsw = Hnsw::build_counted(vectors.distance, &all, dim, g.config, &progress.graph_done);
         let path = tmp.join(GRAPH_FILE);
         let file = File::create(&path).ctx(|| format!("creating {}", path.display()))?;
         let mut w = CrcWriter::new(file, path);

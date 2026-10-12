@@ -109,6 +109,21 @@ fn every_metric_finds_its_neighbours() {
 }
 
 #[test]
+fn a_counted_build_counts_every_row() {
+    let vectors = data(700, 8, 5);
+    let inserted = AtomicU64::new(0);
+    let g = Hnsw::build_counted(
+        Distance::Euclid,
+        &vectors,
+        8,
+        HnswConfig::default(),
+        &inserted,
+    );
+    assert_eq!(inserted.load(AtomicOrdering::Acquire), 700);
+    assert_eq!(g.len(), 700);
+}
+
+#[test]
 fn serial_builds_repeat_exactly() {
     let vectors = data(600, 8, 7);
     let a = Hnsw::build_serial(Distance::Euclid, &vectors, 8, HnswConfig::default());

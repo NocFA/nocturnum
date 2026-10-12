@@ -34,6 +34,15 @@
 //! ones with many dead rows, building aside and swapping them in through the manifest, see
 //! the `merge` submodule.
 //!
+//! # Reads
+//!
+//! A [`View`] is the shard as it stood at one moment, and it holds no lock. The memtable is a
+//! persistent map and every segment's set of live rows sits behind an `Arc`, so taking a view
+//! copies a handful of pointers, and a write that lands while a view is held copies only the
+//! map nodes and live-row sets it changes. A merge that replaces segments while a view still
+//! reads them deletes their directories anyway, the view keeps reading its mapped files, and
+//! the disk space comes back once the last view using them is dropped.
+//!
 //! # Recovery
 //!
 //! Opening a shard reads the manifest, removes every segment directory it does not list
@@ -41,13 +50,14 @@
 //! record after the manifest's watermark.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 
+use imbl::OrdMap;
 use nocturnum_core::{Ack, Payload, PayloadIndexSpec, PointId, VectorConfig};
 use nocturnum_index::{Hnsw, PayloadIndex};
 use roaring::RoaringBitmap;
@@ -96,13 +106,15 @@ pub struct Record {
 #[derive(Debug, Clone)]
 struct MemEntry {
     version: u64,
-    /// `None` marks a deletion.
-    value: Option<Record>,
+    /// `None` marks a deletion. Shared, so copying a map node for a view's sake never copies
+    /// vectors.
+    value: Option<Arc<Record>>,
 }
 
-#[derive(Debug, Default)]
+/// Cheap to clone, the clone sharing every node until one side changes it.
+#[derive(Debug, Default, Clone)]
 struct Memtable {
-    entries: BTreeMap<PointId, MemEntry>,
+    entries: OrdMap<PointId, MemEntry>,
     bytes: usize,
 }
 
@@ -117,12 +129,14 @@ enum Loc {
     },
 }
 
+/// Cheap to clone, so views take their own copy of the list.
+#[derive(Clone)]
 struct Slot {
     segment: Arc<Segment>,
-    /// Rows that hold their point's newest copy.
-    live: RoaringBitmap,
+    /// Rows that hold their point's newest copy, copied on write while a view shares it.
+    live: Arc<RoaringBitmap>,
     /// Each row's entry, by row.
-    rows: Vec<Entry>,
+    rows: Arc<[Entry]>,
     payload_index: Arc<PayloadIndex>,
 }
 
@@ -133,17 +147,22 @@ impl Slot {
         let payload_index = Arc::new(build_payload_index(&segment, &rows, indexes)?);
         Ok(Slot {
             segment,
-            live: RoaringBitmap::new(),
-            rows,
+            live: Arc::new(RoaringBitmap::new()),
+            rows: rows.into(),
             payload_index,
         })
     }
 
     fn set_live(&mut self, row: u32, on: bool) {
+        // Checked first, so a no-op never copies a set a view shares.
+        if self.live.contains(row) == on {
+            return;
+        }
+        let live = Arc::make_mut(&mut self.live);
         if on {
-            self.live.insert(row);
+            live.insert(row);
         } else {
-            self.live.remove(row);
+            live.remove(row);
         }
     }
 }
@@ -218,7 +237,7 @@ impl State {
                     .get(&id)
                     .or_else(|| self.frozen.as_ref().and_then(|f| f.entries.get(&id)))
                     .expect("a recent point is in the memtable or the frozen one");
-                Ok(entry.value.clone())
+                Ok(entry.value.as_deref().cloned())
             }
             Some(&Loc::Segment { id: seg, row }) => {
                 let slot = self
@@ -316,7 +335,7 @@ impl State {
                 id,
                 MemEntry {
                     version: seq,
-                    value,
+                    value: value.map(Arc::new),
                 },
             );
             self.relocate(id, loc);
@@ -324,7 +343,22 @@ impl State {
         self.mem.bytes += bytes;
         self.last_applied = seq;
     }
+
+    /// The state as it is now, for a [`View`].
+    fn view(&self) -> View {
+        View {
+            mem: self.mem.clone(),
+            frozen: self.frozen.clone(),
+            slots: self.slots.clone(),
+            points: self.index.len(),
+            payload_indexes: self.payload_indexes.clone(),
+        }
+    }
 }
+
+/// A hook a test sets to pause a merge at a named moment, see [`BuildProgress`].
+#[cfg(test)]
+pub(crate) type Checkpoint = Arc<dyn Fn(&'static str) + Send + Sync>;
 
 /// One shard of a collection.
 pub struct Shard {
@@ -337,7 +371,9 @@ pub struct Shard {
     flush_broken: AtomicBool,
     /// Held for a whole merge, so merges take turns.
     merging: Mutex<()>,
-    optimizer_status: Mutex<OptimizerStatus>,
+    optimizer: Mutex<merge::OptimizerState>,
+    #[cfg(test)]
+    checkpoint: Mutex<Option<Checkpoint>>,
     _sync: PeriodicSync,
 }
 
@@ -533,7 +569,9 @@ impl Shard {
             flush: Mutex::new(manifest),
             flush_broken: AtomicBool::new(false),
             merging: Mutex::new(()),
-            optimizer_status: Mutex::new(OptimizerStatus::default()),
+            optimizer: Mutex::new(merge::OptimizerState::default()),
+            #[cfg(test)]
+            checkpoint: Mutex::new(None),
         };
         let recovery = ShardRecovery {
             wal: wal_recovery,
@@ -560,9 +598,10 @@ impl Shard {
     pub fn write_with(
         &self,
         ack: Ack,
-        build: impl FnOnce(&View<'_>) -> Result<Operation>,
+        build: impl FnOnce(&View) -> Result<Operation>,
     ) -> Result<u64, WriteError> {
-        self.commit(ack, |view| self.check(build(view)?))
+        // The view is dropped before the write is applied, so applying it copies nothing.
+        self.commit(ack, |state| self.check(build(&state.view())?))
     }
 
     /// Validates payloads and prepares vectors, which must happen before an operation is
@@ -594,13 +633,11 @@ impl Shard {
     fn commit(
         &self,
         ack: Ack,
-        build: impl FnOnce(&View<'_>) -> Result<Operation, WriteError>,
+        build: impl FnOnce(&State) -> Result<Operation, WriteError>,
     ) -> Result<u64, WriteError> {
         let seq = {
             let mut state = write(&self.state);
-            let op = build(&View {
-                state: StateRef::Borrowed(&state),
-            })?;
+            let op = build(&state)?;
             let bytes = op.encode();
             let changes = state.plan(&op)?;
             let seq = self.wal.append(&bytes)?;
@@ -668,16 +705,9 @@ impl Shard {
             .collect()
     }
 
-    /// A consistent view of every point, held until it is dropped, which blocks writes, so
-    /// keep it short.
-    ///
-    /// Read only through the view while holding it: any other `Shard` method takes the lock
-    /// again, and once a writer is queued for it that second request waits behind the writer,
-    /// which waits for the view, so the thread deadlocks.
-    pub fn view(&self) -> View<'_> {
-        View {
-            state: StateRef::Guard(read(&self.state)),
-        }
+    /// Every point as it stands now, unchanged by later writes, see [`View`].
+    pub fn view(&self) -> View {
+        read(&self.state).view()
     }
 
     /// Writes the memtable out as a segment and truncates the WAL behind it. Returns
@@ -846,7 +876,7 @@ impl Shard {
         next.generation += 1;
 
         // Built before anything is written, so a failure changes nothing.
-        let segments: Vec<(Arc<Segment>, Vec<Entry>)> = read(&self.state)
+        let segments: Vec<(Arc<Segment>, Arc<[Entry]>)> = read(&self.state)
             .slots
             .iter()
             .map(|s| (s.segment.clone(), s.rows.clone()))
@@ -882,26 +912,16 @@ pub enum WriteError {
     Storage(#[from] Error),
 }
 
-/// A consistent read-only view of a shard's points.
-pub struct View<'a> {
-    state: StateRef<'a>,
-}
-
-/// The state behind a [`View`]: its own read lock, or the write lock a write already holds.
-enum StateRef<'a> {
-    Guard(RwLockReadGuard<'a, State>),
-    Borrowed(&'a State),
-}
-
-impl std::ops::Deref for StateRef<'_> {
-    type Target = State;
-
-    fn deref(&self) -> &State {
-        match self {
-            StateRef::Guard(g) => g,
-            StateRef::Borrowed(s) => s,
-        }
-    }
+/// A consistent read-only view of a shard's points as they stood when it was taken. It
+/// holds no lock, so it can be kept as long as a read needs and the shard used freely
+/// meanwhile, see the module docs for what it costs.
+pub struct View {
+    mem: Memtable,
+    frozen: Option<Arc<Memtable>>,
+    /// Oldest first.
+    slots: Vec<Slot>,
+    points: usize,
+    payload_indexes: Vec<PayloadIndexSpec>,
 }
 
 /// A point seen through a [`View`].
@@ -933,7 +953,7 @@ fn recent_points<'a>(
     shadow: Option<&'a Memtable>,
 ) -> impl Iterator<Item = PointRef<'a>> {
     table.entries.iter().filter_map(move |(id, e)| {
-        let rec = e.value.as_ref()?;
+        let rec = e.value.as_deref()?;
         if shadow.is_some_and(|m| m.entries.contains_key(id)) {
             return None;
         }
@@ -993,39 +1013,63 @@ impl<'a> SegmentView<'a> {
     }
 }
 
-impl View<'_> {
+impl View {
     pub fn len(&self) -> usize {
-        self.state.index.len()
+        self.points
     }
 
     pub fn get(&self, id: PointId) -> Result<Option<Record>> {
-        self.state.get(id)
+        // The newest layer holding the id has its newest copy, or its deletion.
+        let recent = self
+            .mem
+            .entries
+            .get(&id)
+            .or_else(|| self.frozen.as_ref().and_then(|f| f.entries.get(&id)));
+        if let Some(e) = recent {
+            return Ok(e.value.as_deref().cloned());
+        }
+        // Only one segment row per point is live, so the order segments are searched in
+        // does not matter.
+        for slot in &self.slots {
+            let entries = slot.segment.entries();
+            let Ok(i) = entries.binary_search_by_key(&id, |e| e.id) else {
+                continue;
+            };
+            if let Some(row) = entries[i].row
+                && slot.live.contains(row)
+            {
+                return Ok(Some(Record {
+                    vector: slot.segment.vector(row).to_vec(),
+                    payload: slot.segment.payload(row)?,
+                }));
+            }
+        }
+        Ok(None)
     }
 
     /// The payload indexes every segment builds.
     pub fn payload_indexes(&self) -> &[PayloadIndexSpec] {
-        &self.state.payload_indexes
+        &self.payload_indexes
     }
 
     /// Points not yet in a segment, each exactly once, in no particular order.
     pub fn recent(&self) -> impl Iterator<Item = PointRef<'_>> {
-        let state = &*self.state;
-        let frozen = state
+        let frozen = self
             .frozen
             .as_deref()
             .into_iter()
-            .flat_map(move |f| recent_points(f, Some(&state.mem)));
-        recent_points(&state.mem, None).chain(frozen)
+            .flat_map(|f| recent_points(f, Some(&self.mem)));
+        recent_points(&self.mem, None).chain(frozen)
     }
 
     /// The segments, oldest first. Together with [`View::recent`] their live rows hold every
     /// point exactly once.
     pub fn segments(&self) -> impl Iterator<Item = SegmentView<'_>> {
-        self.state.slots.iter().map(|slot| SegmentView { slot })
+        self.slots.iter().map(|slot| SegmentView { slot })
     }
 
     pub fn is_empty(&self) -> bool {
-        self.state.index.is_empty()
+        self.points == 0
     }
 
     /// Every point, each exactly once, in no particular order.
@@ -1040,7 +1084,7 @@ impl View<'_> {
 mod merge;
 mod snapshot;
 
-pub use merge::{Job, OptimizerOptions, OptimizerStatus};
+pub use merge::{Job, MergeProgress, OptimizerOptions, OptimizerStatus};
 pub use snapshot::{
     Pruned, SnapshotInfo, prune, remove_snapshot, restore, snapshot_checksum, snapshot_name,
 };

@@ -20,6 +20,7 @@ crash-points = []
 nocturnum-core.workspace = true
 nocturnum-index.workspace = true
 roaring.workspace = true
+imbl.workspace = true
 bytemuck.workspace = true
 crc32c.workspace = true
 memmap2.workspace = true

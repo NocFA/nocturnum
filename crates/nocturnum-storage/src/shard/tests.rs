@@ -60,7 +60,11 @@ fn upsert(shard: &Shard, points: Vec<PointWrite>) -> u64 {
 
 /// Every point the shard holds, checking each id appears once.
 fn contents(shard: &Shard) -> BTreeMap<PointId, Record> {
-    let view = shard.view();
+    view_contents(&shard.view())
+}
+
+/// Every point a view holds, checking each id appears once.
+fn view_contents(view: &View) -> BTreeMap<PointId, Record> {
     let mut out = BTreeMap::new();
     for p in view.points() {
         let rec = Record {
@@ -796,6 +800,256 @@ fn a_vacuum_ratio_outside_0_to_1_is_refused() {
     }
 }
 
+/// The bug this guards against: a view held the shard's read lock, so a writer waited for it,
+/// and a thread holding a view deadlocked once it called the shard again with a writer queued.
+#[test]
+fn a_view_holds_no_lock() {
+    let dir = TempDir::new().unwrap();
+    let shard = Arc::new(create(dir.path()));
+    upsert(&shard, vec![point(1, 1.0, json!({"a": 1}))]);
+    shard.flush().unwrap();
+    let view = shard.view();
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let writer = {
+        let shard = shard.clone();
+        std::thread::spawn(move || {
+            upsert(&shard, vec![point(2, 2.0, json!({}))]);
+            shard.flush().unwrap();
+            shard.merge(&shard.segment_ids()).unwrap();
+            tx.send(()).unwrap();
+        })
+    };
+    rx.recv_timeout(Duration::from_secs(30))
+        .expect("the writer finished while the view was held");
+    writer.join().unwrap();
+    // The same thread still holds the view and can use the shard.
+    assert_eq!(shard.len(), 2);
+    assert!(shard.get(PointId::Num(2)).unwrap().is_some());
+    assert_eq!(view.len(), 1);
+    assert_eq!(view.get(PointId::Num(2)).unwrap(), None);
+}
+
+/// A view keeps showing the shard as it was, through writes, flushes and merges that delete
+/// the segment directories it reads from.
+#[test]
+fn a_view_is_unchanged_by_later_writes() {
+    let dir = TempDir::new().unwrap();
+    let shard = create(dir.path());
+    for round in 0..4u64 {
+        upsert(
+            &shard,
+            (0..6)
+                .map(|i| point(round * 3 + i, i as f32, json!({"r": round})))
+                .collect(),
+        );
+        shard.flush().unwrap();
+    }
+    upsert(&shard, vec![point(100, 1.0, json!({"in": "memtable"}))]);
+    let view = shard.view();
+    let before = contents(&shard);
+    assert_eq!(view_contents(&view), before);
+
+    shard
+        .write(
+            Operation::Delete(vec![PointId::Num(0), PointId::Num(100)]),
+            Ack::Applied,
+        )
+        .unwrap();
+    shard
+        .write(
+            Operation::SetPayload {
+                ids: vec![PointId::Num(4), PointId::Num(9)],
+                payload: payload(json!({"changed": true})),
+            },
+            Ack::Applied,
+        )
+        .unwrap();
+    upsert(&shard, vec![point(200, 5.0, json!({}))]);
+    shard.flush().unwrap();
+    let old_segments = shard.segment_ids();
+    shard.merge(&old_segments).unwrap();
+    for id in &old_segments {
+        assert!(
+            !segment_dirs(dir.path()).contains(id),
+            "segment {id} is gone from disk"
+        );
+    }
+
+    assert_eq!(view_contents(&view), before);
+    assert_eq!(view.len(), before.len());
+    for id in (0..20).chain([100, 200]).map(PointId::Num) {
+        assert_eq!(view.get(id).unwrap(), before.get(&id).cloned(), "{id}");
+    }
+    let after = shard.view();
+    assert_eq!(view_contents(&after), contents(&shard));
+    assert_ne!(view_contents(&after), before);
+}
+
+/// Pauses the shard's next merge at each checkpoint, returning a receiver of the checkpoint
+/// names and a sender that lets the merge carry on.
+fn pause_merges(
+    shard: &Shard,
+) -> (
+    std::sync::mpsc::Receiver<&'static str>,
+    std::sync::mpsc::Sender<()>,
+) {
+    let (reached, at) = std::sync::mpsc::channel();
+    let (go, wait) = std::sync::mpsc::channel::<()>();
+    let wait = Mutex::new(wait);
+    *lock(&shard.checkpoint) = Some(Arc::new(move |name| {
+        reached.send(name).unwrap();
+        lock(&wait).recv().unwrap();
+    }));
+    (at, go)
+}
+
+/// The next checkpoint a paused merge reaches, failing rather than hanging when the merge
+/// stopped early. Failing drops the sender that lets the merge carry on, which ends it too.
+fn reached(at: &std::sync::mpsc::Receiver<&'static str>) -> &'static str {
+    at.recv_timeout(Duration::from_secs(60))
+        .expect("the merge reached its next checkpoint")
+}
+
+/// Two segments of 1500 points each, overlapping on 500 ids.
+fn two_segments(shard: &Shard) {
+    for round in 0..2u64 {
+        upsert(
+            shard,
+            (0..1500)
+                .map(|i| point(round * 1000 + i, (i % 97) as f32, json!({})))
+                .collect(),
+        );
+        shard.flush().unwrap();
+    }
+}
+
+/// A merge reports how far it has got while it runs, and nothing once it is done.
+#[test]
+fn a_merge_reports_its_progress() {
+    let dir = TempDir::new().unwrap();
+    let shard = Arc::new(create(dir.path()));
+    two_segments(&shard);
+    let ids = shard.segment_ids();
+    let (at, go) = pause_merges(&shard);
+    let merger = {
+        let (shard, ids) = (shard.clone(), ids.clone());
+        std::thread::spawn(move || shard.merge(&ids).unwrap())
+    };
+
+    assert_eq!(reached(&at), "copying");
+    let status = shard.optimizer_status();
+    assert_eq!(status.running, Some(ids.clone()));
+    let progress = MergeProgress {
+        entries: 3000,
+        entries_done: 1500,
+        graph_rows: 0,
+        graph_done: 0,
+    };
+    assert_eq!(status.progress, Some(progress));
+    go.send(()).unwrap();
+
+    // 2500 distinct points survive the merge, and every one goes into the graph.
+    assert_eq!(reached(&at), "indexing");
+    let progress = MergeProgress {
+        entries_done: 3000,
+        graph_rows: 2500,
+        ..progress
+    };
+    assert_eq!(shard.optimizer_status().progress, Some(progress));
+    go.send(()).unwrap();
+
+    merger.join().unwrap();
+    let status = shard.optimizer_status();
+    assert_eq!((status.running, status.progress), (None, None));
+}
+
+/// A merge that fails clears its progress along with the segments it was rewriting.
+#[test]
+fn a_failed_merge_clears_its_progress() {
+    let dir = TempDir::new().unwrap();
+    let shard = Arc::new(create(dir.path()));
+    two_segments(&shard);
+    let ids = shard.segment_ids();
+    let (at, go) = pause_merges(&shard);
+    let merger = {
+        let (shard, ids) = (shard.clone(), ids.clone());
+        std::thread::spawn(move || shard.merge(&ids))
+    };
+    assert_eq!(reached(&at), "copying");
+    assert!(shard.optimizer_status().progress.is_some());
+    // Stands in for a manifest write that failed meanwhile, so publishing is refused.
+    shard.flush_broken.store(true, Ordering::Release);
+    go.send(()).unwrap();
+    assert_eq!(reached(&at), "indexing");
+    go.send(()).unwrap();
+
+    assert!(merger.join().unwrap().is_err());
+    let status = shard.optimizer_status();
+    assert_eq!((status.running, status.progress), (None, None));
+    assert_eq!(shard.segment_ids(), ids);
+}
+
+/// A view taken while a flush is writing the frozen memtable out keeps showing it after the
+/// flush publishes the segment.
+#[test]
+fn a_view_taken_mid_flush_keeps_its_moment() {
+    let dir = TempDir::new().unwrap();
+    let shard = create(dir.path());
+    upsert(
+        &shard,
+        (0..4).map(|i| point(i, 0.0, json!({"v": "old"}))).collect(),
+    );
+    {
+        let mut st = write(&shard.state);
+        let mem = std::mem::take(&mut st.mem);
+        st.frozen = Some(Arc::new(mem));
+        st.frozen_upto = st.last_applied;
+    }
+    upsert(&shard, vec![point(1, 1.0, json!({"v": "new"}))]);
+    shard
+        .write(Operation::Delete(vec![PointId::Num(2)]), Ack::Applied)
+        .unwrap();
+    let view = shard.view();
+    let then = view_contents(&view);
+    assert_eq!(then.len(), 3);
+    assert_eq!(then[&PointId::Num(1)].payload, payload(json!({"v": "new"})));
+
+    shard.flush().unwrap();
+    shard.flush().unwrap();
+    upsert(&shard, vec![point(3, 2.0, json!({"v": "newer"}))]);
+    assert_eq!(view_contents(&view), then);
+    for id in (0..5).map(PointId::Num) {
+        assert_eq!(view.get(id).unwrap(), then.get(&id).cloned(), "{id}");
+    }
+}
+
+#[test]
+fn merged_entries_count_every_input_entry() {
+    let dir = TempDir::new().unwrap();
+    let shard = create(dir.path());
+    upsert(&shard, (0..5).map(|i| point(i, 0.0, json!({}))).collect());
+    shard.flush().unwrap();
+    upsert(&shard, (3..8).map(|i| point(i, 1.0, json!({}))).collect());
+    shard
+        .write(Operation::Delete(vec![PointId::Num(0)]), Ack::Applied)
+        .unwrap();
+    shard.flush().unwrap();
+    let inputs: Vec<merge::Input> = {
+        let state = read(&shard.state);
+        state
+            .slots
+            .iter()
+            .map(|s| merge::Input::of(&state, s))
+            .collect()
+    };
+    let total: usize = inputs.iter().map(|i| i.segment.entries().len()).sum();
+    let counters = merge::Counters::default();
+    let written = merge::merged_entries(&inputs, true, &counters).count();
+    assert_eq!(counters.read().entries_done, total as u64);
+    assert_eq!(written, 7, "ids 1 to 7, with 0 deleted");
+}
+
 fn snapshot_dir() -> TempDir {
     TempDir::new().unwrap()
 }
@@ -1312,5 +1566,56 @@ proptest! {
                 prop_assert_eq!(shard.get(*id).unwrap(), Some(rec.clone()));
             }
         }
+    }
+
+    /// A view taken at any step keeps showing that step's points through every later write,
+    /// flush, merge and reopen, by iteration and by id.
+    #[test]
+    fn a_view_keeps_its_moment(
+        steps in proptest::collection::vec(step(), 1..60),
+        at in 0usize..60,
+    ) {
+        let dir = TempDir::new().unwrap();
+        let mut shard = create(dir.path());
+        let mut model = BTreeMap::new();
+        let at = at % steps.len();
+        let mut held = None;
+        for (i, step) in steps.into_iter().enumerate() {
+            if i == at {
+                held = Some((shard.view(), model.clone()));
+            }
+            match step {
+                Step::Op(op) => {
+                    apply_model(&mut model, &op);
+                    shard.write(op, Ack::Applied).unwrap();
+                }
+                Step::Flush => {
+                    shard.flush().unwrap();
+                }
+                Step::Reopen => {
+                    drop(shard);
+                    shard = reopen(dir.path());
+                }
+                Step::Merge(at, len) => {
+                    let ids = shard.segment_ids();
+                    if !ids.is_empty() {
+                        let start = at % ids.len();
+                        let end = (start + len).min(ids.len());
+                        shard.merge(&ids[start..end]).unwrap();
+                    }
+                }
+                Step::Optimize => {
+                    let options = OptimizerOptions { max_segments: 2, ..OptimizerOptions::default() };
+                    shard.optimize_once(&options).unwrap();
+                }
+            }
+        }
+        let (view, then) = held.expect("the view was taken");
+        prop_assert_eq!(&view_contents(&view), &then);
+        prop_assert_eq!(view.len(), then.len());
+        for id in (0..12).map(PointId::Num) {
+            prop_assert_eq!(view.get(id).unwrap(), then.get(&id).cloned());
+        }
+        prop_assert_eq!(&contents(&shard), &model);
     }
 }

@@ -315,6 +315,12 @@ async fn collection_status(State(api): Shared, Path(name): Path<String>) -> Repl
                 "max_segments": options.map(|o| o.max_segments),
                 "vacuum_ratio": options.map(|o| o.vacuum_ratio),
                 "running": optimizer.running,
+                "progress": optimizer.progress.map(|p| json!({
+                    "entries": p.entries,
+                    "entries_done": p.entries_done,
+                    "graph_rows": p.graph_rows,
+                    "graph_done": p.graph_done,
+                })),
                 "last": optimizer.last.as_ref().map(job),
                 "last_error": optimizer.last_error,
             },

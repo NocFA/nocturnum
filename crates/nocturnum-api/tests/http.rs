@@ -1287,6 +1287,7 @@ async fn status_and_recall() {
     assert_eq!(v["segments"], json!([]));
     assert_eq!(v["memtable"]["entries"], 50);
     assert_eq!(v["memtable"]["frozen_entries"], 0);
+    assert_eq!(v["optimizer"]["progress"], Value::Null);
     assert!(v["wal"]["last_seq"].as_u64().unwrap() >= 1);
     assert_eq!(v["index"]["m"], 16);
     assert_eq!(v["index"]["default_ef"], 128);

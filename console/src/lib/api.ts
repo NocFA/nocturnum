@@ -77,10 +77,18 @@ export interface CollectionStatus {
 		max_segments: number | null;
 		vacuum_ratio: number | null;
 		running: number[] | null;
+		progress: MergeProgress | null;
 		last: Job | null;
 		last_error: string | null;
 	};
 	disk_bytes: number;
+}
+
+export interface MergeProgress {
+	entries: number;
+	entries_done: number;
+	graph_rows: number;
+	graph_done: number;
 }
 
 export interface Point {

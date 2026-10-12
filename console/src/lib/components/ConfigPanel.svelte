@@ -2,7 +2,7 @@
 	import { api, type IndexSpec } from '#lib/api.ts';
 	import type { CollectionView } from '#lib/collection.svelte.ts';
 	import { app, toasts } from '#lib/state.svelte.ts';
-	import { bytes, percent } from '#lib/format.ts';
+	import { bytes, mergeStage, percent } from '#lib/format.ts';
 	import Icon from './Icon.svelte';
 
 	let { view }: { view: CollectionView } = $props();
@@ -81,7 +81,7 @@
 					<dt>State</dt>
 					<dd>
 						{#if !status.optimizer.enabled}<span class="dim">off</span>
-						{:else if status.optimizer.running}<span class="busy">rewriting</span>
+						{:else if status.optimizer.running}<span class="busy">rewriting{#if status.optimizer.progress}, {mergeStage(status.optimizer.progress)}{/if}</span>
 						{:else}<span class="on">idle</span>{/if}
 					</dd>
 					<dt title="A segment is rewritten once this share of its rows is dead">Vacuum at</dt><dd>{status.optimizer.vacuum_ratio === null ? '–' : percent(status.optimizer.vacuum_ratio, 0)}</dd>

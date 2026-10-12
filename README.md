@@ -18,7 +18,7 @@ It follows the shape of [Qdrant](https://qdrant.tech/), with collections, points
 
 ## What works today
 
-The engine and the REST server run end to end, with 249 tests passing on macOS and Linux, crash tests included.
+The engine and the REST server run end to end, with 262 tests passing on macOS and Linux, crash tests included.
 
 | Area | State |
 |---|---|
@@ -317,7 +317,7 @@ write --> write-ahead log --> memtable in RAM --flush at 32 MiB--> immutable seg
                                                                    (vectors, payloads, payload indexes,
                                                                     an HNSW graph from 10 MiB of vectors)
 
-read  --> the memtable first, then segments from newest to oldest, the newest copy of a point wins
+read  --> a snapshot of the memtable and segments, the newest copy of a point wins
 
 in the background --> merge small segments and vacuum deleted rows, each published by swapping the manifest
 ```
@@ -326,6 +326,7 @@ in the background --> merge small segments and vacuum deleted rows, each publish
 - **The memtable** holds recent writes in RAM, and its only durable form is the log, which keeps the on-disk side simple: every file is written once and never changed.
 - **A flush** writes the memtable out as a new immutable segment, built in a temporary directory and renamed into place, then publishes a new **manifest** listing it, and only then trims the log.
 - **The optimizer** merges small segments once there are more than 8, and rewrites any segment with more than 20% deleted rows, building aside and swapping the manifest the same way.
+- **Reads** work from a snapshot of the memtable and the segment list that costs a few pointer copies to take, so a long search or scroll never holds a write back, and a write that lands meanwhile copies only what it changes.
 - **Search** asks each segment for its best matches and merges them, using exact scans for small or tightly filtered sets and the HNSW graph for large ones, and checks HNSW results against exact search in the tests.
 
 The code is split into crates:

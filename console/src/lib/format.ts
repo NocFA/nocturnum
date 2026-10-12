@@ -1,5 +1,7 @@
 // Numbers, sizes and times the way the console shows them, with tabular numerals in CSS.
 
+import type { MergeProgress } from '#lib/api.ts';
+
 const whole = new Intl.NumberFormat('en-GB');
 
 /** 48210 as "48,210". */
@@ -84,6 +86,13 @@ export function plural(n: number, one: string, many = one + 's'): string {
 }
 
 /** An object's own entry for a key, so names like "constructor" never find an inherited value. */
+/** How far a rewrite has got: copying entries, then building the graph when it gets one. */
+export function mergeStage(p: MergeProgress | null | undefined): string {
+	if (!p) return '';
+	if (p.graph_rows > 0) return `indexing ${percent(p.graph_done / p.graph_rows, 0)}`;
+	return `copying ${percent(p.entries ? p.entries_done / p.entries : 1, 0)}`;
+}
+
 export function own<T>(map: Record<string, T>, key: string): T | undefined {
 	return Object.hasOwn(map, key) ? map[key] : undefined;
 }
