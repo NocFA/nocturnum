@@ -30,6 +30,7 @@ allowed_hosts = []          # Host names accepted while no keys are set
 
 [storage]
 path = "./data"
+snapshots_path = "/mnt/backup/nocturnum"   # optional, "snapshots" inside path by default
 
 [auth]
 admin_key = "..."           # at least 16 visible ASCII characters, no spaces
@@ -46,6 +47,7 @@ level = "info"              # a tracing filter, such as "nocturnum_api=debug,inf
 | `server.host` | `NOCTURNUM_HOST` | `--host` |
 | `server.port` | `NOCTURNUM_PORT` | `--port` |
 | `storage.path` | `NOCTURNUM_DATA` | `--data` |
+| `storage.snapshots_path` | `NOCTURNUM_SNAPSHOTS` | `--snapshots` |
 | `auth.allow_anonymous` | `NOCTURNUM_ALLOW_ANONYMOUS` | `--allow-anonymous`, or `--allow-anonymous=false` to override the file |
 | `auth.admin_key` | `NOCTURNUM_ADMIN_KEY` | none |
 | `auth.read_only_key` | `NOCTURNUM_READ_ONLY_KEY` | none |
@@ -83,9 +85,16 @@ allow_anonymous = true
 ```text
 data/
   LOCK                         held while a server runs, so a second one cannot share the directory
+  schedules.json               snapshot schedules, replaced whole and synced on every change
   collections/<name>/          one shard per collection, see docs/storage/durability.md
-  snapshots/<name>/            <name>-<milliseconds>.snapshot and its .sha256
+  snapshots/                   or storage.snapshots_path
+    LOCK                       held while a server runs, so two servers never prune each other's
+    <name>/                    <name>-<milliseconds>.snapshot and its .sha256
 ```
+
+Snapshots can go on another disk with `storage.snapshots_path`, which keeps a backup when the data disk dies, and it must lie outside `collections/`.
+Restoring copies from there into the data directory, so the two can be on different filesystems.
+`schedules.json` that cannot be read stops the server at startup, since starting without it would silently stop the backups.
 
 Creating, deleting and restoring a collection each work in a dot-named directory beside the collections and rename it into place, so a collection appears whole or not at all.
 Startup removes what a crash left part way, and finishes a restore that had already moved the old copy aside, since the restored copy was complete and checked by then, or puts the old copy back if the new one is missing, syncing the directory before anything is removed.

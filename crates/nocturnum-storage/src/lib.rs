@@ -18,5 +18,5 @@ pub use shard::{
     Job, OptimizerOptions, OptimizerStatus, PointRef, Record, SegmentView, Shard, ShardOptions,
     ShardRecovery, SnapshotInfo, View, WalStats, WriteError,
 };
-pub use sync::sync_dir;
+pub use sync::{create_dir_all_durable, sync_dir};
 pub use wal::{Recovery, Wal, WalOptions};

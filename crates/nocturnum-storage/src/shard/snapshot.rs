@@ -217,7 +217,18 @@ fn hash_file(f: &mut File, path: &Path) -> Result<String> {
 
 fn expected_sha256(path: &Path) -> Result<String> {
     let side = sidecar(path);
-    let bytes = read_bounded(&side, 4096).ctx(|| format!("reading {}", side.display()))?;
+    let bytes = match read_bounded(&side, 4096) {
+        Ok(b) => b,
+        // Far larger than a checksum, so not one.
+        Err(e) if e.kind() == io::ErrorKind::InvalidData => {
+            return Err(Error::Corrupt {
+                path: side,
+                offset: 0,
+                reason: "the sidecar is too large to hold a SHA-256".into(),
+            });
+        }
+        Err(e) => return Err(e).ctx(|| format!("reading {}", side.display())),
+    };
     let text = String::from_utf8_lossy(&bytes);
     let sum = text.split_whitespace().next().unwrap_or("");
     if sum.len() != 64 || !sum.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -270,8 +281,14 @@ fn copy_entry(from: &mut impl Read, to: &mut File, out: &Path) -> Result<u64, Co
 }
 
 /// Whether the snapshot at `path` matches its sidecar.
+/// Whether the snapshot at `path` matches its sidecar, a sidecar that holds no checksum
+/// counting as a mismatch.
 fn verify(path: &Path) -> Result<bool> {
-    let expected = expected_sha256(path)?;
+    let expected = match expected_sha256(path) {
+        Ok(s) => s,
+        Err(Error::Corrupt { .. }) => return Ok(false),
+        Err(e) => return Err(e),
+    };
     let mut f = File::open(path).ctx(|| format!("opening {}", path.display()))?;
     Ok(hash_file(&mut f, path)? == expected)
 }

@@ -1005,10 +1005,17 @@ fn prune_keeps_the_newest_good_snapshots() {
     bytes[700] ^= 1;
     fs::write(&newest, &bytes).unwrap();
     fs::write(snaps.path().join("c-9.snapshot.1-0.partial"), b"half").unwrap();
+    // A sidecar that holds no checksum counts as damage too, and pruning carries on past it.
+    let garbled = snaps.path().join("c-000000000000003.snapshot");
+    fs::write(
+        snaps.path().join("c-000000000000003.snapshot.sha256"),
+        "x".repeat(5000),
+    )
+    .unwrap();
 
     let pruned = prune(snaps.path(), 2).unwrap();
-    assert_eq!(pruned.invalid, [newest]);
-    assert_eq!(pruned.deleted.len(), 2);
+    assert_eq!(pruned.invalid, [newest, garbled]);
+    assert_eq!(pruned.deleted.len(), 1);
     let mut left: Vec<_> = fs::read_dir(snaps.path())
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
@@ -1017,6 +1024,8 @@ fn prune_keeps_the_newest_good_snapshots() {
     assert_eq!(
         left,
         [
+            "c-000000000000001.snapshot",
+            "c-000000000000001.snapshot.sha256",
             "c-000000000000002.snapshot",
             "c-000000000000002.snapshot.sha256",
             "c-000000000000003.snapshot",

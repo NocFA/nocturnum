@@ -112,6 +112,10 @@ pub(crate) fn routes() -> Router<Arc<Api>> {
             post(take_snapshot).get(list_snapshots),
         )
         .route(
+            &format!("{c}/snapshots/schedule"),
+            get(get_schedule).put(set_schedule).delete(delete_schedule),
+        )
+        .route(
             &format!("{c}/snapshots/{{snapshot}}"),
             get(download_snapshot).delete(delete_snapshot),
         )
@@ -537,6 +541,25 @@ async fn delete_snapshot(
     with_registry(&api, move |r| {
         r.delete_snapshot(&name, &snapshot)?;
         Ok(json!({"deleted": true}))
+    })
+    .await
+}
+
+async fn get_schedule(State(api): Shared, Path(name): Path<String>) -> Reply {
+    with_registry(&api, move |r| r.schedule(&name)).await
+}
+
+async fn set_schedule(
+    State(api): Shared,
+    Path(name): Path<String>,
+    Body(schedule): Body<crate::schedule::Schedule>,
+) -> Reply {
+    with_registry(&api, move |r| r.set_schedule(&name, schedule)).await
+}
+
+async fn delete_schedule(State(api): Shared, Path(name): Path<String>) -> Reply {
+    with_registry(&api, move |r| {
+        Ok(json!({"deleted": r.delete_schedule(&name)?}))
     })
     .await
 }

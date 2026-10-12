@@ -56,15 +56,26 @@ fn parent_of(path: &Path) -> &Path {
 /// whole path survives a crash.
 ///
 /// Entries that already existed are synced too, since another process may have created them
-/// and stopped before syncing.
-pub(crate) fn create_dir_all_durable(dir: &Path) -> io::Result<()> {
+/// and stopped before syncing, but a parent this process may not open, such as the
+/// filesystem root on some systems, is skipped there, while every parent of an entry this
+/// call creates has to sync, and is checked before anything is created, so a call that fails
+/// leaves nothing behind for a retry to take as already there.
+pub fn create_dir_all_durable(dir: &Path) -> io::Result<()> {
+    // A relative path ends in an empty ancestor, which names no entry.
+    let entries: Vec<(&Path, bool)> = dir
+        .ancestors()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| (p, matches!(p.try_exists(), Ok(true))))
+        .collect();
+    // The topmost missing entry is the only one made in a directory this call did not make.
+    if let Some((first_missing, _)) = entries.iter().rev().find(|(_, existed)| !existed) {
+        File::open(parent_of(first_missing))?;
+    }
     fs::create_dir_all(dir)?;
-    for entry in dir.ancestors().filter(|p| !p.as_os_str().is_empty()) {
+    for (entry, existed) in entries {
         if entry.parent().is_some() {
-            // A parent this process may not even open, such as the filesystem root on some
-            // systems, cannot hold a directory it created, so it is skipped.
             match sync_dir(parent_of(entry)) {
-                Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {}
+                Err(e) if existed && e.kind() == io::ErrorKind::PermissionDenied => {}
                 other => other?,
             }
         }
@@ -96,4 +107,42 @@ pub(crate) fn read_bounded(path: &Path, max: u64) -> io::Result<Vec<u8>> {
         ));
     }
     Ok(out)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn a_new_directory_in_an_unreadable_parent_is_an_error() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let parent = dir.path().join("write-only");
+        fs::create_dir(&parent).unwrap();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o333)).unwrap();
+        let made = create_dir_all_durable(&parent.join("new/deeper"));
+        let again = create_dir_all_durable(&parent.join("new/deeper"));
+        let left = parent.join("new").exists();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(made.is_err(), "its entry could not be synced");
+        assert!(again.is_err(), "nor on a retry");
+        assert!(!left, "nothing was created");
+        // One that someone else made is synced as far as allowed.
+        fs::create_dir(parent.join("theirs")).unwrap();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o333)).unwrap();
+        let theirs = create_dir_all_durable(&parent.join("theirs"));
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(theirs.is_ok());
+        // The same through a relative path.
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o333)).unwrap();
+        // Up to the root, then down to the same directory.
+        let up = std::env::current_dir().unwrap().components().count() - 1;
+        let mut relative: std::path::PathBuf = std::iter::repeat_n("..", up).collect();
+        relative.push(parent.strip_prefix("/").unwrap());
+        let made = create_dir_all_durable(&relative.join("rel/deeper"));
+        let again = create_dir_all_durable(&relative.join("rel/deeper"));
+        let left = parent.join("rel").exists();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(made.is_err() && again.is_err() && !left, "{relative:?}");
+    }
 }

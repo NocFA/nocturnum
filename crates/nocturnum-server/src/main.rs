@@ -71,10 +71,12 @@ fn serve(config: Config) -> Result<(), String> {
         let (failed, load_failed) = oneshot::channel::<String>();
         let loader = api.clone();
         let data = config.storage.path.clone();
+        let snapshots_dir = config.storage.snapshots_path.clone();
         tokio::task::spawn_blocking(move || {
             let options = RegistryOptions {
                 shard: Default::default(),
                 optimizer: Some(OptimizerOptions::default()),
+                snapshots_dir,
             };
             match Registry::open(&data, options) {
                 Ok(r) => {

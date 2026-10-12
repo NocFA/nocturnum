@@ -10,12 +10,14 @@
 //! and fsyncs.
 
 mod auth;
+pub mod cron;
 pub mod dto;
 pub mod error;
 mod extract;
 mod metrics;
 pub mod registry;
 mod routes;
+pub mod schedule;
 
 use std::sync::{Arc, OnceLock};
 
@@ -24,6 +26,7 @@ use axum::extract::DefaultBodyLimit;
 
 pub use error::ApiError;
 pub use registry::{Registry, RegistryOptions};
+pub use schedule::{Schedule, ScheduleState, Scheduler};
 
 /// The default request body limit, 32 MiB.
 pub const DEFAULT_MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
@@ -54,6 +57,9 @@ pub struct Api {
     keys: auth::Keys,
     allowed_hosts: Vec<String>,
     max_body_bytes: usize,
+    /// Declared before `registry`, so it stops, letting go of its handle on the registry,
+    /// before the registry is dropped and closes the collections.
+    scheduler: OnceLock<Scheduler>,
     registry: OnceLock<Arc<Registry>>,
     metrics: metrics::Metrics,
 }
@@ -67,14 +73,19 @@ impl Api {
             ),
             allowed_hosts: options.allowed_hosts,
             max_body_bytes: options.max_body_bytes,
+            scheduler: OnceLock::new(),
             registry: OnceLock::new(),
             metrics: metrics::Metrics::default(),
         })
     }
 
-    /// Starts serving collections, once they are loaded. Later calls are ignored.
+    /// Starts serving collections, once they are loaded, and running their scheduled
+    /// snapshots. Later calls are ignored.
     pub fn set_registry(&self, registry: Registry) {
-        let _ = self.registry.set(Arc::new(registry));
+        let registry = Arc::new(registry);
+        if self.registry.set(registry.clone()).is_ok() {
+            let _ = self.scheduler.set(Scheduler::start(registry));
+        }
     }
 
     /// The collections, or `503 unavailable` while they are still loading.

@@ -3,9 +3,14 @@
 //! Layout under the data directory:
 //!
 //! ```text
+//! LOCK                           held while the registry is open
+//! schedules.json                 snapshot schedules, see `crate::schedule`
 //! collections/<name>/            one shard per collection
 //! snapshots/<name>/<file>.snapshot and <file>.snapshot.sha256
 //! ```
+//!
+//! The snapshots can live elsewhere, set by [`RegistryOptions::snapshots_dir`], with a `LOCK`
+//! of their own so two servers never prune each other's.
 //!
 //! Collection names never start with a dot, so the registry keeps its work in progress in
 //! dot-named directories beside them:
@@ -33,19 +38,23 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use axum::http::StatusCode;
 use nocturnum_core::VectorConfig;
 use nocturnum_query::Collection;
-use nocturnum_storage::shard::{remove_snapshot, restore, snapshot_checksum};
-use nocturnum_storage::{OptimizerOptions, ShardOptions, sync_dir};
+use nocturnum_storage::shard::{prune, remove_snapshot, restore, snapshot_checksum};
+use nocturnum_storage::{OptimizerOptions, ShardOptions, create_dir_all_durable, sync_dir};
 
+use crate::cron::civil;
 use crate::error::ApiError;
+use crate::schedule::{Schedule, ScheduleState, Schedules};
 
 /// The longest collection name.
 pub const MAX_NAME_LEN: usize = 63;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct RegistryOptions {
     pub shard: ShardOptions,
     /// Runs an optimizer for every collection, or none when `None`.
     pub optimizer: Option<OptimizerOptions>,
+    /// Where snapshots are kept, `snapshots` in the data directory when `None`.
+    pub snapshots_dir: Option<PathBuf>,
 }
 
 /// A snapshot file, as the API describes it.
@@ -71,9 +80,13 @@ pub struct Registry {
     /// Collections on disk that could not be put back in service after a failed delete or
     /// restore, by name, which keep `/readyz` failing until a restart.
     lost: Mutex<BTreeMap<String, String>>,
-    /// The exclusive lock on the data directory, so a second server cannot tidy away this
-    /// one's work in progress.
-    _lock: fs::File,
+    schedules: Schedules,
+    /// Held while scheduled runs prune and while schedules are removed, see
+    /// `Registry::run_schedule`.
+    retention: Mutex<()>,
+    /// The exclusive locks on the data and snapshot directories, so a second server cannot
+    /// tidy away this one's work in progress or prune its snapshots.
+    _locks: [fs::File; 2],
 }
 
 fn read<T>(l: &RwLock<T>) -> RwLockReadGuard<'_, T> {
@@ -193,29 +206,37 @@ impl Registry {
     /// Opens every collection under `data`, creating the layout on first start.
     pub fn open(data: &Path, options: RegistryOptions) -> Result<Registry, ApiError> {
         let collections_dir = data.join("collections");
-        let snapshots_dir = data.join("snapshots");
+        let snapshots_dir = options
+            .snapshots_dir
+            .clone()
+            .unwrap_or_else(|| data.join("snapshots"));
+        // Compared with `..` and symlinks resolved, before either is created, since deleting a
+        // collection removes everything under it.
+        let resolved =
+            |dir: &Path| resolve(dir).map_err(io_error(format!("resolving {}", dir.display())));
+        let (c, s) = (resolved(&collections_dir)?, resolved(&snapshots_dir)?);
+        if s.starts_with(&c) || c.starts_with(&s) {
+            return Err(ApiError::invalid(format!(
+                "the snapshots directory {} and the collections {} must not hold one another",
+                s.display(),
+                c.display()
+            )));
+        }
+        // Every new directory up the path is synced, so a snapshot root made on another disk
+        // survives a power cut along with the snapshots in it.
         for dir in [&collections_dir, &snapshots_dir] {
-            fs::create_dir_all(dir).map_err(io_error(format!("creating {}", dir.display())))?;
+            create_dir_all_durable(dir).map_err(io_error(format!("creating {}", dir.display())))?;
         }
-        let lock_path = data.join("LOCK");
-        let lock = fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&lock_path)
-            .map_err(io_error(format!("opening {}", lock_path.display())))?;
-        match lock.try_lock() {
-            Ok(()) => {}
-            Err(fs::TryLockError::WouldBlock) => {
-                return Err(ApiError::unavailable(format!(
-                    "{} is in use by another nocturnum server",
-                    data.display()
-                )));
-            }
-            Err(fs::TryLockError::Error(e)) => {
-                return Err(io_error(format!("locking {}", lock_path.display()))(e));
-            }
+        // Checked again now both exist, in case anything moved in between.
+        let (c, s) = (resolved(&collections_dir)?, resolved(&snapshots_dir)?);
+        if s.starts_with(&c) || c.starts_with(&s) {
+            return Err(ApiError::invalid(format!(
+                "the snapshots directory {} and the collections {} must not hold one another",
+                s.display(),
+                c.display()
+            )));
         }
+        let locks = [lock_dir(data)?, lock_dir(&snapshots_dir)?];
         let registry = Registry {
             collections_dir,
             snapshots_dir,
@@ -224,7 +245,9 @@ impl Registry {
             changes: Mutex::new(()),
             last_snapshot_ms: Mutex::new(0),
             lost: Mutex::new(BTreeMap::new()),
-            _lock: lock,
+            schedules: Schedules::load(data)?,
+            retention: Mutex::new(()),
+            _locks: locks,
         };
         registry.recover()?;
         let mut names = Vec::new();
@@ -246,6 +269,14 @@ impl Registry {
             let c = registry.open_collection(&name)?;
             write(&registry.open).insert(name, Arc::new(c));
         }
+        registry.schedules.adopt(
+            |name| read(&registry.open).contains_key(name),
+            |name| {
+                let newest = registry.snapshots(name).ok()?.pop()?;
+                let at = snapshot_time(&newest.name)?;
+                Some((newest.name, at))
+            },
+        )?;
         Ok(registry)
     }
 
@@ -368,6 +399,21 @@ impl Registry {
     /// open, so a change never acts on a name whose state is unknown.
     fn reconcile(&self, name: &str) -> Result<(), ApiError> {
         self.settle_restore(name)?;
+        if self.schedules.deleting(name) && !read(&self.open).contains_key(name) {
+            // The delete may have failed to sync its rename, which has to be durable before
+            // the schedule goes, or a power cut could bring the collection back without it.
+            let dir = &self.collections_dir;
+            sync_dir(dir)
+                .map_err(|e| ApiError::unavailable(format!("syncing {}: {e}", dir.display())))?;
+            let _retention = self.retention();
+            self.schedules.remove(name).map_err(|e| {
+                ApiError::unavailable(format!(
+                    "the snapshot schedule of the deleted collection {name} could not be \
+                     removed: {}",
+                    e.message
+                ))
+            })?;
+        }
         if !read(&self.open).contains_key(name) && complete(&self.collections_dir.join(name))? {
             self.reinstate(&mut write(&self.open), name);
         }
@@ -450,6 +496,14 @@ impl Registry {
         let _changes = lock(&self.changes);
         // Settles a restore's leftovers first, or an old copy could come back at the next start.
         self.reconcile(name)?;
+        if !read(&self.open).contains_key(name) {
+            return Ok(false);
+        }
+        // The schedule is marked first, durably, so it stops running, and startup keeps it only
+        // if the collection is still there, so it never outlives the collection to prune the
+        // snapshots of one restored or created later under the same name.
+        let _retention = self.retention();
+        let scheduled = self.schedules.mark_deleting(name)?;
         let Some(c) = write(&self.open).remove(name) else {
             return Ok(false);
         };
@@ -458,11 +512,18 @@ impl Registry {
         let trash = dir.join(format!(".deleted-{}", uuid::Uuid::new_v4()));
         let live = dir.join(name);
         if let Err(e) = fs::rename(&live, &trash) {
-            // Still in place, so it goes back into service.
+            // Still in place, so it goes back into service with its schedule.
             self.reinstate(&mut write(&self.open), name);
+            if scheduled && let Err(e) = self.schedules.unmark_deleting(name) {
+                tracing::warn!("keeping the snapshot schedule of {name}: {}", e.message);
+            }
             return Err(io_error(format!("deleting collection {name}"))(e));
         }
         sync_dir(dir).map_err(io_error(format!("deleting collection {name}")))?;
+        // Removed now the collection is gone, and if that fails, before the name is used again.
+        if scheduled && let Err(e) = self.schedules.remove(name) {
+            tracing::warn!("removing the snapshot schedule of {name}: {}", e.message);
+        }
         if let Err(e) = fs::remove_dir_all(&trash) {
             // It is out of the way already, and the next start removes it.
             tracing::warn!("removing {}: {e}", trash.display());
@@ -503,11 +564,23 @@ impl Registry {
 
     pub fn take_snapshot(&self, name: &str) -> Result<SnapshotEntry, ApiError> {
         let c = self.get(name)?;
+        self.snapshot_collection(name, &c)
+    }
+
+    /// The collection `name`, if `wanted` still says so once no create, delete or restore is
+    /// under way, for work that has to stay on the collection it started with.
+    pub(crate) fn pin(&self, name: &str, wanted: impl FnOnce() -> bool) -> Option<Arc<Collection>> {
+        let _changes = lock(&self.changes);
+        if wanted() { self.get(name).ok() } else { None }
+    }
+
+    pub(crate) fn snapshot_collection(
+        &self,
+        name: &str,
+        c: &Collection,
+    ) -> Result<SnapshotEntry, ApiError> {
         let dir = self.snapshot_dir(name);
-        fs::create_dir_all(&dir).map_err(io_error(format!("creating {}", dir.display())))?;
-        if let Some(parent) = dir.parent() {
-            sync_dir(parent).map_err(io_error(format!("syncing {}", parent.display())))?;
-        }
+        create_dir_all_durable(&dir).map_err(io_error(format!("creating {}", dir.display())))?;
         let file = {
             let mut last = lock(&self.last_snapshot_ms);
             let now = SystemTime::now()
@@ -518,7 +591,7 @@ impl Registry {
         };
         let info = c
             .snapshot(&dir.join(&file))
-            .map_err(|e| ApiError::from_query(&c, e))?;
+            .map_err(|e| ApiError::from_query(c, e))?;
         Ok(SnapshotEntry {
             created_at: created_at(&file, &info.path),
             name: file,
@@ -641,36 +714,120 @@ impl Registry {
     }
 }
 
+impl Registry {
+    pub(crate) fn schedules(&self) -> &Schedules {
+        &self.schedules
+    }
+
+    pub(crate) fn retention(&self) -> MutexGuard<'_, ()> {
+        lock(&self.retention)
+    }
+
+    /// The snapshot schedule of a collection and how its runs went.
+    pub fn schedule(&self, name: &str) -> Result<ScheduleState, ApiError> {
+        self.get(name)?;
+        self.schedules.get(name).ok_or_else(|| {
+            ApiError::not_found(format!("collection {name:?} has no snapshot schedule"))
+        })
+    }
+
+    /// Sets or replaces the snapshot schedule of a collection, whose next run is the first
+    /// time the cron names from now on.
+    pub fn set_schedule(&self, name: &str, schedule: Schedule) -> Result<ScheduleState, ApiError> {
+        let cron = schedule.check()?;
+        // Taking turns with delete, so a schedule never outlives its collection.
+        let _changes = lock(&self.changes);
+        self.get(name)?;
+        let _retention = self.retention();
+        self.schedules.set(name, schedule, cron, SystemTime::now())
+    }
+
+    /// Removes the snapshot schedule of a collection, keeping its snapshots, and returns
+    /// whether it had one.
+    pub fn delete_schedule(&self, name: &str) -> Result<bool, ApiError> {
+        let _changes = lock(&self.changes);
+        self.get(name)?;
+        let _retention = self.retention();
+        self.schedules.remove(name)
+    }
+
+    /// Keeps the newest `keep` snapshots of a collection that pass their checksum, and
+    /// returns the names of newer ones that failed it, which are left in place.
+    pub fn prune_snapshots(&self, name: &str, keep: usize) -> Result<Vec<String>, String> {
+        let pruned = prune(&self.snapshot_dir(name), keep).map_err(|e| e.to_string())?;
+        Ok(pruned
+            .invalid
+            .iter()
+            .filter_map(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .collect())
+    }
+}
+
 /// When a snapshot was taken, from the time in its name, or its file's modification time for
 /// a name without one.
 fn created_at(file: &str, path: &Path) -> String {
-    let from_name = file
-        .strip_suffix(".snapshot")
-        .and_then(|s| s.rsplit_once('-'))
-        .filter(|(_, ms)| ms.len() == 15)
-        .and_then(|(_, ms)| ms.parse::<u64>().ok())
-        .map(|ms| UNIX_EPOCH + Duration::from_millis(ms));
-    let time = from_name
+    let time = snapshot_time(file)
         .or_else(|| fs::metadata(path).and_then(|m| m.modified()).ok())
         .unwrap_or(UNIX_EPOCH);
     rfc3339(time)
 }
 
+/// The time in a snapshot's name, `<collection>-<15 digits of milliseconds>.snapshot`.
+fn snapshot_time(file: &str) -> Option<SystemTime> {
+    file.strip_suffix(".snapshot")
+        .and_then(|s| s.rsplit_once('-'))
+        .filter(|(_, ms)| ms.len() == 15)
+        .and_then(|(_, ms)| ms.parse::<u64>().ok())
+        .map(|ms| UNIX_EPOCH + Duration::from_millis(ms))
+}
+
+/// `path` made absolute, walked one part at a time the way the system would, resolving each
+/// part that exists, symlinks included, and `.` and `..` in parts that do not.
+fn resolve(path: &Path) -> io::Result<PathBuf> {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for part in std::env::current_dir()?.join(path).components() {
+        match part {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other),
+        }
+        match fs::canonicalize(&out) {
+            Ok(real) => out = real,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(out)
+}
+
+/// Takes the exclusive lock in `dir`, held until the file is dropped.
+fn lock_dir(dir: &Path) -> Result<fs::File, ApiError> {
+    let path = dir.join("LOCK");
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(io_error(format!("opening {}", path.display())))?;
+    match lock.try_lock() {
+        Ok(()) => Ok(lock),
+        Err(fs::TryLockError::WouldBlock) => Err(ApiError::unavailable(format!(
+            "{} is in use by another nocturnum server",
+            dir.display()
+        ))),
+        Err(fs::TryLockError::Error(e)) => Err(io_error(format!("locking {}", path.display()))(e)),
+    }
+}
+
 /// Formats a time as RFC 3339 in UTC to the second, such as `2026-10-11T03:00:00Z`.
 pub fn rfc3339(time: SystemTime) -> String {
     let secs = time.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
-    let days = (secs / 86_400) as i64;
+    let (year, month, day) = civil((secs / 86_400) as i64);
     let rem = secs % 86_400;
-    // Civil date from days since 1970-01-01, after Howard Hinnant's algorithm.
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
     format!(
         "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
         rem / 3600,
@@ -797,6 +954,31 @@ mod tests {
         drop(r);
         let r = Registry::open(dir.path(), RegistryOptions::default()).unwrap();
         assert!(r.get("a").is_err(), "the old copy did not come back");
+    }
+
+    #[test]
+    fn a_schedule_left_by_a_delete_is_removed_before_the_name_is_reused() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let r = with_one_point(dir.path());
+        let schedule = crate::Schedule {
+            cron: "@daily".into(),
+            keep: 1,
+        };
+        r.set_schedule("a", schedule).unwrap();
+        // A delete that moved the collection away but could not remove its schedule.
+        assert!(r.schedules.mark_deleting("a").unwrap());
+        close(write(&r.open).remove("a").unwrap());
+        let cols = dir.path().join("collections");
+        fs::rename(cols.join("a"), cols.join(".deleted-x")).unwrap();
+        let config = VectorConfig {
+            dim: 2,
+            distance: nocturnum_core::Distance::Dot,
+        };
+        assert!(r.create("a", config).unwrap());
+        assert_eq!(r.schedule("a").unwrap_err().code, "not_found");
+        drop(r);
+        let r = Registry::open(dir.path(), RegistryOptions::default()).unwrap();
+        assert_eq!(r.schedule("a").unwrap_err().code, "not_found");
     }
 
     #[test]

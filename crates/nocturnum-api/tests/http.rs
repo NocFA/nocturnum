@@ -1145,3 +1145,85 @@ fn startup_settles_what_a_crash_left() {
     names.sort();
     assert_eq!(names, ["a", "b"]);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn snapshot_schedules() {
+    let mut s = start_with_keys().await;
+    s.create("c", 2, "dot").await;
+    let path = "/v1/collections/c/snapshots/schedule";
+
+    let (status, v) = s.get(path).await;
+    assert_eq!((status, code(&v)), (StatusCode::NOT_FOUND, "not_found"));
+    let (status, v) = s.put(path, json!({"cron": "0 3 * * *", "keep": 0})).await;
+    assert_eq!(
+        (status, v["error"]["at"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("keep"))
+    );
+    let (status, v) = s.put(path, json!({"cron": "0 25 * * *", "keep": 7})).await;
+    assert_eq!(
+        (status, v["error"]["at"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("cron"))
+    );
+    let (status, v) = s
+        .put(path, json!({"cron": "0 3 * * *", "keep": 7, "tz": "x"}))
+        .await;
+    assert_eq!(
+        (status, code(&v)),
+        (StatusCode::BAD_REQUEST, "invalid_request")
+    );
+    let (status, _) = s
+        .put(
+            "/v1/collections/nope/snapshots/schedule",
+            json!({"cron": "@daily", "keep": 1}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let set = s
+        .ok(
+            Method::PUT,
+            path,
+            Some(json!({"cron": "0 3 * * *", "keep": 7})),
+        )
+        .await;
+    assert_eq!(set["cron"], "0 3 * * *");
+    assert_eq!(set["keep"], 7);
+    assert!(
+        set["next_run"].as_str().unwrap().ends_with("T03:00:00Z"),
+        "{set}"
+    );
+    assert_eq!(set["running"], false);
+    assert_eq!(set["damaged"], json!([]));
+
+    // The read-only key can look but not change it.
+    s.key = Some(READER);
+    assert_eq!(s.ok(Method::GET, path, None).await, set);
+    let (status, _) = s.put(path, json!({"cron": "@hourly", "keep": 1})).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = s.call(Method::DELETE, path, None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    s.key = Some(ADMIN);
+
+    let (_, metrics) = s.get("/metrics").await;
+    let metrics = metrics.as_str().unwrap();
+    assert!(
+        metrics.contains("nocturnum_snapshot_running{collection=\"c\"} 0"),
+        "{metrics}"
+    );
+    assert!(metrics.contains("nocturnum_snapshot_next_run_timestamp_seconds{collection=\"c\"}"));
+    assert!(metrics.contains("nocturnum_snapshot_failures_total{collection=\"c\"} 0"));
+
+    // A snapshot name never shadows the schedule, and the schedule never lists as a snapshot.
+    s.ok(Method::POST, "/v1/collections/c/snapshots", None)
+        .await;
+    let list = s.ok(Method::GET, "/v1/collections/c/snapshots", None).await;
+    assert_eq!(list["snapshots"].as_array().unwrap().len(), 1);
+
+    let v = s.ok(Method::DELETE, path, None).await;
+    assert_eq!(v, json!({"deleted": true}));
+    let v = s.ok(Method::DELETE, path, None).await;
+    assert_eq!(v, json!({"deleted": false}));
+    let (status, _) = s.get(path).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(s.dir.path().join("schedules.json").is_file());
+}

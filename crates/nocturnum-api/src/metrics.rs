@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use axum::extract::{MatchedPath, Request, State};
 use axum::http::Method;
@@ -204,6 +204,62 @@ impl Metrics {
             header(o, name, kind, help);
             for (collection, values) in &rows {
                 let _ = writeln!(o, "{name}{{collection=\"{collection}\"}} {}", values[i]);
+            }
+        }
+
+        let schedules = registry.map(|r| r.schedules().gauges()).unwrap_or_default();
+        let secs = |t: Option<SystemTime>| {
+            t.and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_secs_f64())
+        };
+        let gauges: [(&str, &str, &str); 5] = [
+            (
+                "nocturnum_snapshot_running",
+                "gauge",
+                "1 while a scheduled snapshot of the collection runs.",
+            ),
+            (
+                "nocturnum_snapshot_next_run_timestamp_seconds",
+                "gauge",
+                "When the next scheduled snapshot is due.",
+            ),
+            (
+                "nocturnum_snapshot_last_success_timestamp_seconds",
+                "gauge",
+                "When the last scheduled snapshot succeeded, from the newest snapshot on disk after a restart.",
+            ),
+            (
+                "nocturnum_snapshot_failures_total",
+                "counter",
+                "Scheduled snapshot runs that failed, since the server started.",
+            ),
+            (
+                "nocturnum_snapshot_damaged",
+                "gauge",
+                "Kept snapshots that failed their checksum at the last scheduled run.",
+            ),
+        ];
+        let rows: Vec<(String, [Option<f64>; 5])> = schedules
+            .iter()
+            .map(|(name, g)| {
+                (
+                    escape(name),
+                    [
+                        Some(f64::from(u8::from(g.running))),
+                        secs(g.next_run),
+                        secs(g.last_success),
+                        Some(g.failures as f64),
+                        Some(g.damaged as f64),
+                    ],
+                )
+            })
+            .collect();
+        for (i, (name, kind, help)) in gauges.iter().enumerate() {
+            header(o, name, kind, help);
+            for (collection, values) in &rows {
+                if let Some(v) = values[i] {
+                    let _ = writeln!(o, "{name}{{collection=\"{collection}\"}} {v}");
+                }
             }
         }
         out

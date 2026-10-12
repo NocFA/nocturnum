@@ -30,9 +30,9 @@ The engine and the REST server run end to end, with 217 tests passing on macOS a
 | REST API | collections, points, search, scroll, count, payload edits, indexes and snapshots, specified in [`docs/api/v1.md`](docs/api/v1.md) |
 | Security | admin and read-only keys, loopback by default, protection against DNS rebinding and cross-site requests when no keys are set |
 | Operations | `/livez`, `/readyz`, Prometheus `/metrics`, clean shutdown on SIGINT or SIGTERM |
-| Backups | snapshots with checksums, download and restore, crash-safe swaps |
+| Backups | snapshots with checksums, download and restore, crash-safe swaps, and cron schedules with keep-last-N per collection |
 
-Scheduled snapshots, the web console, gRPC and quantization are next, see [Roadmap](#roadmap).
+The web console, gRPC and quantization are next, see [Roadmap](#roadmap).
 
 ## Quick start
 
@@ -256,6 +256,7 @@ On SIGINT or SIGTERM it stops taking connections, lets requests in flight finish
 ```text
 data/
   LOCK                  held while a server runs, so a second one cannot share it
+  schedules.json        snapshot schedules
   collections/<name>/   one collection: its log, segments and manifest
   snapshots/<name>/     <name>-<milliseconds>.snapshot files with a .sha256 beside each
 ```
@@ -275,6 +276,22 @@ A snapshot is taken while writes carry on and holds every write acknowledged bef
 Restoring checks the file against its checksum and unpacks it beside the live collection first, so a damaged snapshot is refused with `400 invalid_snapshot` and changes nothing, then swaps the copies.
 
 Deleting a collection keeps its snapshots, so restoring one brings it back.
+
+### On a schedule
+
+```bash
+j -X PUT localhost:6333/v1/collections/notes/snapshots/schedule -d '{"cron": "0 3 * * *", "keep": 7}'
+j localhost:6333/v1/collections/notes/snapshots/schedule
+```
+
+```json
+{"cron":"0 3 * * *","keep":7,"next_run":"2026-10-12T03:00:00Z","running":false,"last_run":null,"last_success":null,"last_snapshot":null,"last_error":null,"damaged":[]}
+```
+
+That takes a snapshot every day at 03:00 UTC and keeps the newest 7 that pass their checksum, while a damaged one is kept aside and reported in `damaged` so it never pushes out a good one.
+A run missed while the server was off happens once as soon as it starts again, and `/metrics` has each schedule's last success, next run and failures for alerting.
+
+Snapshots can live on another disk, set with `storage.snapshots_path`, so losing the data disk does not take the backups with it.
 
 ## How it works inside
 
@@ -319,10 +336,10 @@ Qdrant's Apache-2.0 source was read to understand how it works, and nocturnum's 
 
 ## Roadmap
 
-1. Scheduled snapshots: a cron schedule and keep-last-N per collection.
-2. The web console, built into the binary and served on the same port.
-3. gRPC on port 6334, over the same operations as REST.
-4. Scalar quantization, sparse vectors with BM25, optional TLS and OpenAPI docs.
+1. The web console, built into the binary and served on the same port.
+2. gRPC on port 6334, over the same operations as REST.
+3. Scalar quantization, sparse vectors with BM25, optional TLS and OpenAPI docs.
+4. Snapshots sent to S3-compatible storage.
 5. Benchmarks and power-loss tests on real hardware.
 
 Clustering is out of v1, though shard ids are in the on-disk format already so it can come later without a migration.

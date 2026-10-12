@@ -120,6 +120,24 @@ Either way `/readyz` answers `503` naming the collection and `nocturnum_collecti
 
 Creating, deleting and restoring a collection rename whole directories into place, see [`docs/server/config.md`](../server/config.md).
 
+## Scheduled snapshots
+
+Scheduled runs use the same `snapshot` and `prune` as above, and the scheduler's own promises are tested in `crates/nocturnum-api/src/schedule.rs`:
+
+| Promise | Tested by |
+|---|---|
+| a run keeps the newest `keep` good snapshots and deletes older ones, and never runs twice for one scheduled time | `a_due_schedule_snapshots_and_keeps_the_newest` |
+| a damaged newer snapshot is reported, kept and not counted | `damaged_snapshots_are_reported_and_kept` |
+| a run missed while the server was down happens once at the next start | `a_run_missed_while_down_happens_once_at_start` |
+| a snapshot taken since the missed time counts as the run | `a_newer_snapshot_on_disk_counts_as_the_last_run` |
+| a failed run is reported and waits for the next scheduled time | `a_failed_run_is_reported_and_waits_for_the_next_time` |
+| an unreadable `schedules.json` stops startup rather than drop the schedules | `an_unreadable_schedule_file_stops_startup` |
+| a run queued before its schedule changed or went never snapshots or prunes under the old one | `a_queued_run_never_outlives_its_schedule`, `a_queued_run_never_runs_a_replaced_schedule` |
+| a delete marks the schedule durably first, so a crash part way keeps it for the surviving collection and never lets it prune a later one of the same name | `a_delete_stopped_by_a_crash_keeps_the_schedule`, `a_schedule_left_by_a_delete_is_removed_before_the_name_is_reused`, `a_schedule_dropped_at_start_stays_dropped` |
+| a delete that fails keeps the collection and its schedule | `a_delete_that_fails_keeps_the_schedule` |
+
+`schedules.json` is written aside, synced, renamed into place and its directory synced, so a crash leaves the old or the new file whole.
+
 ## Unit tests
 
 `crates/nocturnum-storage/src/wal/tests.rs` covers what a crash test reaches only by chance in the WAL:

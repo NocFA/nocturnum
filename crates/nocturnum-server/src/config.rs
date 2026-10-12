@@ -39,6 +39,9 @@ pub struct Server {
 #[serde(deny_unknown_fields, default)]
 pub struct Storage {
     pub path: PathBuf,
+    /// Where snapshots are kept, `snapshots` inside `path` when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshots_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -74,6 +77,7 @@ impl Default for Storage {
     fn default() -> Self {
         Storage {
             path: PathBuf::from("./data"),
+            snapshots_path: None,
         }
     }
 }
@@ -87,7 +91,7 @@ impl Default for Log {
 }
 
 /// Every table and key the config file knows, the only words a parse error may quote.
-const FIELDS: [&str; 13] = [
+const FIELDS: [&str; 14] = [
     "server",
     "storage",
     "auth",
@@ -97,6 +101,7 @@ const FIELDS: [&str; 13] = [
     "max_body_bytes",
     "allowed_hosts",
     "path",
+    "snapshots_path",
     "admin_key",
     "read_only_key",
     "allow_anonymous",
@@ -140,6 +145,9 @@ pub struct Cli {
     /// The data directory.
     #[arg(long, env = "NOCTURNUM_DATA")]
     pub data: Option<PathBuf>,
+    /// Where snapshots are kept, `snapshots` in the data directory by default.
+    #[arg(long, env = "NOCTURNUM_SNAPSHOTS")]
+    pub snapshots: Option<PathBuf>,
     /// Allows listening beyond loopback with no API keys set, `--allow-anonymous=false`
     /// overrides a `true` in the file.
     #[arg(
@@ -198,6 +206,9 @@ impl Config {
         }
         if let Some(data) = &cli.data {
             config.storage.path = data.clone();
+        }
+        if let Some(snapshots) = &cli.snapshots {
+            config.storage.snapshots_path = Some(snapshots.clone());
         }
         if let Some(allow) = cli.allow_anonymous {
             config.auth.allow_anonymous = allow;
@@ -278,6 +289,14 @@ impl Config {
         }
         if self.storage.path.as_os_str().is_empty() {
             return Err("storage.path must not be empty".into());
+        }
+        if let Some(p) = &self.storage.snapshots_path {
+            if p.as_os_str().is_empty() {
+                return Err("storage.snapshots_path must not be empty".into());
+            }
+            if p.starts_with(self.storage.path.join("collections")) {
+                return Err("storage.snapshots_path must be outside the collections".into());
+            }
         }
         tracing_subscriber::EnvFilter::try_new(&self.log.level)
             .map_err(|e| format!("log.level {:?}: {e}", self.log.level))?;
@@ -361,6 +380,22 @@ mod tests {
         assert!(refused("[auth]\nadmin_key = \"abcdefghijklmnop\u{e9}\"\n").contains("ASCII"));
         assert!(refused("[auth]\nadmin_key = \"abcdefgh ijklmnop\"\n").contains("ASCII"));
         assert!(refused("[log]\nlevel = \"=bad=\"\n").contains("log.level"));
+    }
+
+    #[test]
+    fn snapshots_can_live_elsewhere() {
+        let (_d, mut cli) = file("[storage]\npath = \"/srv/n\"\nsnapshots_path = \"/backup/n\"\n");
+        let c = Config::load(&cli, Env::default()).unwrap();
+        assert_eq!(c.storage.snapshots_path, Some(PathBuf::from("/backup/n")));
+        assert!(c.redacted().contains("snapshots_path = \"/backup/n\""));
+        cli.snapshots = Some(PathBuf::from("/srv/n/collections/x"));
+        assert!(
+            Config::load(&cli, Env::default())
+                .unwrap_err()
+                .contains("outside")
+        );
+        let c = Config::load(&Cli::default(), Env::default()).unwrap();
+        assert!(!c.redacted().contains("snapshots_path"));
     }
 
     #[test]

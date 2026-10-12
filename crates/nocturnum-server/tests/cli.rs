@@ -11,6 +11,7 @@ fn nocturnum() -> Command {
         "NOCTURNUM_HOST",
         "NOCTURNUM_PORT",
         "NOCTURNUM_DATA",
+        "NOCTURNUM_SNAPSHOTS",
         "NOCTURNUM_ALLOW_ANONYMOUS",
         "NOCTURNUM_ADMIN_KEY",
         "NOCTURNUM_READ_ONLY_KEY",
