@@ -350,6 +350,39 @@ pub struct WalStats {
     pub sync_time: Duration,
 }
 
+/// One segment as [`Shard::status`] reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SegmentStatus {
+    pub id: u64,
+    /// Rows written, live or not.
+    pub rows: u32,
+    /// Rows holding their point's newest copy.
+    pub live: u64,
+    /// The bytes of its vectors, mapped from disk rather than read into the heap.
+    pub vector_bytes: u64,
+    /// The bytes its files take on disk.
+    pub disk_bytes: u64,
+    /// Nodes in its graph, `None` for a segment small enough to scan whole.
+    pub graph_nodes: Option<usize>,
+    /// Roughly the heap bytes its graph takes, 0 without one.
+    pub graph_bytes: u64,
+}
+
+/// What [`Shard::status`] reports: the segments and the memtable at one moment.
+#[derive(Debug, Clone)]
+pub struct ShardStatus {
+    /// Oldest first.
+    pub segments: Vec<SegmentStatus>,
+    /// Writes in the memtable not yet in a segment, one per point, deletions included.
+    pub memtable_entries: usize,
+    /// The logged bytes the memtable has taken in, which a flush resets.
+    pub memtable_bytes: usize,
+    /// Entries in a frozen memtable, one a flush is writing out as a segment or one left
+    /// behind by a failed flush for the next to retry, 0 when there is none.
+    pub frozen_entries: usize,
+    pub options: ShardOptions,
+}
+
 /// What [`Shard::open`] found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShardRecovery {
@@ -596,6 +629,34 @@ impl Shard {
     /// Whether the memtable has grown past [`ShardOptions::flush_bytes`].
     pub fn needs_flush(&self) -> bool {
         read(&self.state).mem.bytes >= self.opts.flush_bytes
+    }
+
+    /// The segments and the memtable as they are now, for the console.
+    pub fn status(&self) -> ShardStatus {
+        let state = read(&self.state);
+        let segments = state
+            .slots
+            .iter()
+            .map(|slot| {
+                let seg = &slot.segment;
+                SegmentStatus {
+                    id: seg.id(),
+                    rows: slot.rows.len() as u32,
+                    live: slot.live.len(),
+                    vector_bytes: std::mem::size_of_val(seg.vectors()) as u64,
+                    disk_bytes: seg.disk_bytes(),
+                    graph_nodes: seg.graph().map(|g| g.len()),
+                    graph_bytes: seg.graph().map_or(0, |g| g.heap_bytes()),
+                }
+            })
+            .collect();
+        ShardStatus {
+            segments,
+            memtable_entries: state.mem.entries.len(),
+            memtable_bytes: state.mem.bytes,
+            frozen_entries: state.frozen.as_ref().map_or(0, |f| f.entries.len()),
+            options: self.opts,
+        }
     }
 
     /// The live segments' ids, oldest first.

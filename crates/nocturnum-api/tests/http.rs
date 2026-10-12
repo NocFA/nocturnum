@@ -170,6 +170,14 @@ async fn health_version_and_loading() {
     assert_eq!(s.get("/readyz").await.0, StatusCode::OK);
     let v = s.ok(Method::GET, "/v1", None).await;
     assert_eq!(v["name"], "nocturnum");
+    assert_eq!(v["role"], "anonymous");
+    assert_eq!(v["keys"], json!({"admin": false, "read_only": false}));
+    assert!(v["uptime_seconds"].as_u64().is_some());
+    assert!(v["started_at"].as_str().unwrap().ends_with('Z'));
+    let disk = &v["disk"]["collections"];
+    if !disk.is_null() {
+        assert!(disk["available_bytes"].as_u64().unwrap() <= disk["total_bytes"].as_u64().unwrap());
+    }
 }
 
 #[tokio::test]
@@ -216,7 +224,12 @@ async fn collections_lifecycle() {
     let v = s.ok(Method::GET, "/v1/collections", None).await;
     assert_eq!(
         v,
-        json!({"collections": [{"name": "notes", "points": 0}, {"name": "other", "points": 0}]})
+        json!({"collections": [
+            {"name": "notes", "points": 0, "vectors": {"dim": 3, "distance": "cosine"},
+             "segments": 0, "failure": null},
+            {"name": "other", "points": 0, "vectors": {"dim": 2, "distance": "dot"},
+             "segments": 0, "failure": null},
+        ]})
     );
     let v = s.ok(Method::GET, "/v1/collections/notes", None).await;
     assert_eq!(
@@ -576,22 +589,48 @@ async fn keys_guard_everything_but_health() {
     }
     // The key is checked before the body is read, so a stranger cannot make the server take
     // in a large upload.
-    let huge = "x".repeat(64 * 1024 * 1024);
-    let resp = s
-        .request(Method::PUT, "/v1/collections/c/points")
-        .header("content-type", "application/json")
-        .body(huge)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    // The request declares a 64 MiB body and sends none of it, so only a server that answers
+    // before reading the body can reply in time.
+    {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let addr = s.base.trim_start_matches("http://");
+        let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let head = format!(
+            "PUT /v1/collections/c/points HTTP/1.1\r\nHost: {addr}\r\n\
+             Content-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            64 * 1024 * 1024
+        );
+        conn.write_all(head.as_bytes()).await.unwrap();
+        // Reads through the end of the status line, which may arrive in pieces.
+        let read_status = async {
+            let mut reply = Vec::new();
+            let mut buf = [0u8; 256];
+            while !reply.windows(2).any(|w| w == b"\r\n") && reply.len() < 4096 {
+                let n = conn.read(&mut buf).await.unwrap();
+                assert!(n > 0, "the server closed without answering");
+                reply.extend_from_slice(&buf[..n]);
+            }
+            reply
+        };
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(5), read_status)
+            .await
+            .expect("the server answers without waiting for the body");
+        let reply = String::from_utf8_lossy(&reply);
+        assert!(reply.starts_with("HTTP/1.1 401"), "{reply}");
+    }
     s.key = Some("example-wrong-key-0123");
     assert_eq!(s.get("/v1/collections").await.0, StatusCode::UNAUTHORIZED);
 
+    s.key = Some(ADMIN);
+    assert_eq!(s.ok(Method::GET, "/v1", None).await["role"], "admin");
     s.key = Some(READER);
+    let v = s.ok(Method::GET, "/v1", None).await;
+    assert_eq!(v["role"], "read-only");
+    assert_eq!(v["keys"], json!({"admin": true, "read_only": true}));
     assert_eq!(s.get("/v1/collections/c").await.0, StatusCode::OK);
+    assert_eq!(s.get("/v1/collections/c/status").await.0, StatusCode::OK);
     assert_eq!(s.get("/metrics").await.0, StatusCode::OK);
-    for path in ["search", "scroll", "count", "get"] {
+    for path in ["search", "scroll", "count", "get", "recall"] {
         let body = match path {
             "search" => json!({"vector": [1.0, 0.0]}),
             "get" => json!({"ids": [1]}),
@@ -1226,4 +1265,108 @@ async fn snapshot_schedules() {
     let (status, _) = s.get(path).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(s.dir.path().join("schedules.json").is_file());
+}
+
+#[tokio::test]
+async fn status_and_recall() {
+    let s = start().await;
+    s.create("c", 2, "euclid").await;
+    let (status, v) = s.get("/v1/collections/nope/status").await;
+    assert_eq!((status, code(&v)), (StatusCode::NOT_FOUND, "not_found"));
+
+    let points: Vec<Value> = (0..50)
+        .map(|i| json!({"id": i, "vector": [(i % 10) as f32, (i / 10) as f32]}))
+        .collect();
+    let (status, v) = s
+        .put("/v1/collections/c/points", json!({"points": points}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let v = s.ok(Method::GET, "/v1/collections/c/status", None).await;
+    assert_eq!(v["points"], 50);
+    assert_eq!(v["failure"], Value::Null);
+    assert_eq!(v["segments"], json!([]));
+    assert_eq!(v["memtable"]["entries"], 50);
+    assert_eq!(v["memtable"]["frozen_entries"], 0);
+    assert!(v["wal"]["last_seq"].as_u64().unwrap() >= 1);
+    assert_eq!(v["index"]["m"], 16);
+    assert_eq!(v["index"]["default_ef"], 128);
+    // The test registry runs no optimizer.
+    assert_eq!(v["optimizer"]["enabled"], false);
+    assert_eq!(v["optimizer"]["vacuum_ratio"], Value::Null);
+
+    let v = s
+        .ok(
+            Method::POST,
+            "/v1/collections/c/points/recall",
+            Some(json!({"samples": 20, "limit": 3, "seed": 1})),
+        )
+        .await;
+    assert_eq!(
+        (v["samples"].as_u64(), v["limit"].as_u64()),
+        (Some(20), Some(3))
+    );
+    assert_eq!(
+        (v["points"].as_u64(), v["indexed_points"].as_u64()),
+        (Some(50), Some(0))
+    );
+    let runs = v["runs"].as_array().unwrap();
+    assert_eq!(
+        runs.iter()
+            .map(|r| r["hnsw_ef"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        vec![16, 32, 64, 128, 256]
+    );
+    // Nothing is under a graph yet, so every search is exact.
+    for r in runs {
+        assert_eq!(r["recall"], 1.0);
+        assert!(r["p50_ms"].as_f64().unwrap() <= r["p99_ms"].as_f64().unwrap());
+    }
+    assert!(v["exact"]["p50_ms"].as_f64().is_some());
+
+    let r = s.api.registry().unwrap();
+    tokio::task::spawn_blocking(move || r.get("c").unwrap().flush().unwrap())
+        .await
+        .unwrap();
+    let v = s.ok(Method::GET, "/v1/collections/c/status", None).await;
+    let seg = &v["segments"][0];
+    assert_eq!(
+        (seg["rows"].as_u64(), seg["live"].as_u64()),
+        (Some(50), Some(50))
+    );
+    // 50 two-dimensional points are far below the 10 MiB a graph needs.
+    assert_eq!(seg["index"], "plain");
+    assert_eq!(seg["graph_bytes"], 0);
+    assert_eq!(seg["vector_bytes"], 50 * 2 * 4);
+    assert_eq!(v["memtable"]["entries"], 0);
+    assert!(v["disk_bytes"].as_u64().unwrap() >= seg["disk_bytes"].as_u64().unwrap());
+
+    // Default widths are raised to the limit.
+    let v = s
+        .ok(
+            Method::POST,
+            "/v1/collections/c/points/recall",
+            Some(json!({"samples": 2, "limit": 40})),
+        )
+        .await;
+    let widths: Vec<u64> = v["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["hnsw_ef"].as_u64().unwrap())
+        .collect();
+    assert_eq!(widths, vec![40, 64, 128, 256]);
+
+    for (body, at) in [
+        (json!({"samples": 0}), None),
+        (json!({"hnsw_ef": [2], "limit": 3}), None),
+        (json!({"bogus": 1}), Some("bogus")),
+    ] {
+        let (status, v) = s
+            .post("/v1/collections/c/points/recall", body.clone())
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {v}");
+        if let Some(at) = at {
+            assert_eq!(v["error"]["at"], at);
+        }
+    }
 }

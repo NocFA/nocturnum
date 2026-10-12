@@ -64,6 +64,7 @@ impl ApiError {
             QueryError::Invalid(message) => ApiError::invalid(message),
             QueryError::Input(e) => e.into(),
             QueryError::Storage(e) => ApiError::from_storage(collection.failure(), e),
+            QueryError::TimedOut(message) => ApiError::unavailable(message),
         }
     }
 

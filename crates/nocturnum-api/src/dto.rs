@@ -52,6 +52,10 @@ pub struct CreateCollection {
 pub struct CollectionSummary {
     pub name: String,
     pub points: usize,
+    pub vectors: VectorConfig,
+    pub segments: usize,
+    /// Why the collection stopped taking writes, `null` while it is healthy.
+    pub failure: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -61,6 +65,32 @@ pub struct CollectionInfo {
     pub points: usize,
     pub segments: usize,
     pub indexes: Vec<PayloadIndexSpec>,
+}
+
+/// The body of `POST .../points/recall`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Recall {
+    #[serde(default = "hundred")]
+    pub samples: usize,
+    #[serde(default = "ten")]
+    pub limit: usize,
+    /// Defaults to 16, 32, 64, 128 and 256, raised to at least `limit`.
+    pub hnsw_ef: Option<Vec<usize>>,
+    pub filter: Option<Filter>,
+    pub seed: Option<u64>,
+}
+
+impl Recall {
+    pub fn widths(&self) -> Vec<usize> {
+        match &self.hnsw_ef {
+            Some(ef) => ef.clone(),
+            None => [16, 32, 64, 128, 256]
+                .into_iter()
+                .map(|ef: usize| ef.max(self.limit))
+                .collect(),
+        }
+    }
 }
 
 // Writes.

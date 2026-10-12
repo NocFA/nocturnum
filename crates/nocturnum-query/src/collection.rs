@@ -32,11 +32,16 @@ use nocturnum_core::payload::PathStep;
 use nocturnum_core::{Ack, Filter, JsonPath, Payload, PayloadIndexSpec, PointId, VectorConfig};
 use nocturnum_index::flat::search_filtered;
 
+pub use recall::{
+    MAX_RECALL_EF_VALUES, MAX_RECALL_LIMIT, MAX_RECALL_SAMPLES, RECALL_TIME_BUDGET, RecallReport,
+    RecallRequest, RecallRun,
+};
+
 use crate::plan::{PlanOptions, Strategy, choose};
 use nocturnum_index::{Bounds, TopK};
 use nocturnum_storage::{
     Operation, Optimizer, OptimizerOptions, OptimizerStatus, PointRef, PointWrite, SegmentView,
-    Shard, ShardOptions, ShardRecovery, SnapshotInfo, View, WalStats, WriteError,
+    Shard, ShardOptions, ShardRecovery, ShardStatus, SnapshotInfo, View, WalStats, WriteError,
 };
 use serde_json::{Map, Value};
 
@@ -62,6 +67,9 @@ pub enum QueryError {
     Input(#[from] nocturnum_core::Error),
     #[error(transparent)]
     Storage(#[from] nocturnum_storage::Error),
+    /// The work ran out of the time it is allowed, and nothing was changed.
+    #[error("{0}")]
+    TimedOut(String),
 }
 
 impl QueryError {
@@ -176,6 +184,7 @@ pub struct Collection {
     shard: Arc<Shard>,
     plan: PlanOptions,
     optimizer: Option<Optimizer>,
+    optimizer_options: Option<OptimizerOptions>,
 }
 
 impl Collection {
@@ -191,6 +200,7 @@ impl Collection {
             shard: Arc::new(shard),
             plan,
             optimizer: None,
+            optimizer_options: None,
         };
         Ok((collection, recovery))
     }
@@ -200,6 +210,17 @@ impl Collection {
     pub fn start_optimizer(&mut self, options: OptimizerOptions) {
         self.optimizer = None;
         self.optimizer = Some(Optimizer::start(self.shard.clone(), options));
+        self.optimizer_options = Some(options);
+    }
+
+    /// The options the background optimizer runs with, `None` when it is not running.
+    pub fn optimizer_options(&self) -> Option<OptimizerOptions> {
+        self.optimizer_options
+    }
+
+    /// The segments and the memtable as they are now, see [`Shard::status`].
+    pub fn status(&self) -> ShardStatus {
+        self.shard.status()
     }
 
     /// Writes a snapshot of the collection to `path`, with its checksum in `<path>.sha256`,
@@ -403,6 +424,12 @@ impl Collection {
 
     /// The best matches for a vector, best first.
     pub fn search(&self, req: &SearchRequest) -> Result<Vec<ScoredPoint>> {
+        self.search_in(&self.shard.view(), req)
+    }
+
+    /// [`Collection::search`] against a view the caller holds, so several searches can see
+    /// the same points.
+    fn search_in(&self, view: &View<'_>, req: &SearchRequest) -> Result<Vec<ScoredPoint>> {
         let window = req.offset.saturating_add(req.limit);
         if window > MAX_RESULT_WINDOW {
             return Err(QueryError::Invalid(format!(
@@ -426,7 +453,6 @@ impl Collection {
             return Ok(Vec::new());
         }
 
-        let view = self.shard.view();
         let mut top = TopK::new(window);
         for p in view.recent() {
             let score = distance.score(&query, p.vector);
@@ -680,5 +706,6 @@ fn remove(map: &mut Map<String, Value>, path: &[&str]) {
     }
 }
 
+mod recall;
 #[cfg(test)]
 mod tests;

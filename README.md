@@ -18,7 +18,7 @@ It follows the shape of [Qdrant](https://qdrant.tech/), with collections, points
 
 ## What works today
 
-The engine and the REST server run end to end, with 217 tests passing on macOS and Linux, crash tests included.
+The engine and the REST server run end to end, with 249 tests passing on macOS and Linux, crash tests included.
 
 | Area | State |
 |---|---|
@@ -29,7 +29,7 @@ The engine and the REST server run end to end, with 217 tests passing on macOS a
 | Payload indexes | keyword, integer, float and bool |
 | REST API | collections, points, search, scroll, count, payload edits, indexes and snapshots, specified in [`docs/api/v1.md`](docs/api/v1.md) |
 | Security | admin and read-only keys, loopback by default, protection against DNS rebinding and cross-site requests when no keys are set |
-| Operations | `/livez`, `/readyz`, Prometheus `/metrics`, clean shutdown on SIGINT or SIGTERM |
+| Operations | `/livez`, `/readyz`, Prometheus `/metrics`, per-collection engine status, a recall check against exact search, clean shutdown on SIGINT or SIGTERM |
 | Backups | snapshots with checksums, download and restore, crash-safe swaps, and cron schedules with keep-last-N per collection |
 
 The web console, gRPC and quantization are next, see [Roadmap](#roadmap).
@@ -164,6 +164,20 @@ j localhost:6333/v1/collections/notes
 ```
 
 `segments` is 0 because these points still sit in the memtable, which is flushed to a segment once it holds 32 MiB.
+
+Ask what the engine holds right now, and how much of the true top results graph search finds at a few beam widths:
+
+```bash
+j localhost:6333/v1/collections/notes/status
+j -X POST localhost:6333/v1/collections/notes/points/recall -d '{"samples": 3, "limit": 2, "hnsw_ef": [2, 8]}'
+```
+
+```json
+{"disk_bytes":267,"failure":null,"index":{"default_ef":128,"ef_construct":100,"m":16,"min_bytes":10485760},"memtable":{"bytes":223,"entries":3,"flush_bytes":33554432,"frozen_entries":0},"optimizer":{"enabled":true,"last":null,"last_error":null,"max_segments":8,"running":null,"vacuum_ratio":0.2},"points":3,"segments":[],"wal":{"bytes":267,"fsyncs":1,"last_seq":1}}
+{"exact":{"p50_ms":0.003,"p99_ms":0.011},"indexed_points":0,"limit":2,"points":3,"runs":[{"hnsw_ef":2,"p50_ms":0.003,"p99_ms":0.003,"recall":1.0},{"hnsw_ef":8,"p50_ms":0.003,"p99_ms":0.003,"recall":1.0}],"samples":3}
+```
+
+Recall is 1 here because no segment is big enough for a graph yet, so every search is exact.
 
 Change payloads, delete points and take a snapshot:
 

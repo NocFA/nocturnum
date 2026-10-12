@@ -615,6 +615,19 @@ impl Hnsw {
         self.levels.is_empty()
     }
 
+    /// Roughly the heap memory the graph takes: levels, layer 0 links and offsets, and the
+    /// upper layers' links, leaving out allocator and hash table overhead.
+    pub fn heap_bytes(&self) -> u64 {
+        let u32s = (self.offsets.len() + self.layer0.len()) as u64;
+        let upper: u64 = self
+            .upper
+            .iter()
+            .flat_map(|layer| layer.values())
+            .map(|links| 4 + 4 * links.len() as u64)
+            .sum();
+        self.levels.len() as u64 + 4 * u32s + upper
+    }
+
     /// The best `k` rows for `query` that `allow` accepts, best first, searching layer 0 with
     /// a beam of `max(ef, k)`. `vectors` must be the rows the graph was built over.
     pub fn search<E>(

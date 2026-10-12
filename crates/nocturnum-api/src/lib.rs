@@ -20,6 +20,7 @@ mod routes;
 pub mod schedule;
 
 use std::sync::{Arc, OnceLock};
+use std::time::{Instant, SystemTime};
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
@@ -62,6 +63,8 @@ pub struct Api {
     scheduler: OnceLock<Scheduler>,
     registry: OnceLock<Arc<Registry>>,
     metrics: metrics::Metrics,
+    started_at: SystemTime,
+    started: Instant,
 }
 
 impl Api {
@@ -76,6 +79,8 @@ impl Api {
             scheduler: OnceLock::new(),
             registry: OnceLock::new(),
             metrics: metrics::Metrics::default(),
+            started_at: SystemTime::now(),
+            started: Instant::now(),
         })
     }
 

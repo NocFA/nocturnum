@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fs;
 use std::time::Duration;
 
 use nocturnum_core::{Distance, PayloadIndexKind};
@@ -531,4 +532,134 @@ fn a_collection_snapshot_restores_and_searches_the_same() {
     let req = SearchRequest::new(vec![1.0, 0.5], 5);
     assert_eq!(r.search(&req).unwrap(), c.search(&req).unwrap());
     assert_eq!(r.count(None).unwrap(), 31);
+}
+
+#[test]
+fn recall_compares_graph_search_with_exact_search() {
+    let dir = TempDir::new().unwrap();
+    let c = create(dir.path(), Distance::Euclid);
+    let req = |samples, ef: Vec<usize>| RecallRequest {
+        samples,
+        limit: 5,
+        hnsw_ef: ef,
+        filter: None,
+        seed: Some(7),
+    };
+
+    // An empty collection has nothing to sample.
+    let empty = c.recall(&req(10, vec![5])).unwrap();
+    assert_eq!((empty.samples, empty.points), (0, 0));
+    assert_eq!(empty.runs[0].recall, None);
+
+    let points: Vec<PointWrite> = (0..400u64)
+        .map(|i| point(i, [(i % 20) as f32, (i / 20) as f32], json!({"n": i % 3})))
+        .collect();
+    c.upsert(points[..300].to_vec(), Ack::Durable).unwrap();
+    c.flush().unwrap();
+    c.upsert(points[300..].to_vec(), Ack::Durable).unwrap();
+
+    // Widths come back sorted and deduplicated, and a sample is capped by the points held.
+    let r = c.recall(&req(1000, vec![64, 5, 64])).unwrap();
+    assert_eq!(r.samples, 400);
+    assert_eq!((r.points, r.indexed_points), (400, 300));
+    assert_eq!(
+        r.runs.iter().map(|x| x.hnsw_ef).collect::<Vec<_>>(),
+        vec![5, 64]
+    );
+    for run in &r.runs {
+        let recall = run.recall.unwrap();
+        assert!((0.0..=1.0).contains(&recall), "{recall}");
+        assert!(run.p50 <= run.p99);
+    }
+    // A wide beam over 300 two-dimensional points finds every true neighbour.
+    assert_eq!(r.runs[1].recall, Some(1.0));
+    assert!(r.exact_p50 <= r.exact_p99);
+
+    // The same seed picks the same sample while the segments stay the same.
+    let a = c.recall(&req(20, vec![5])).unwrap();
+    let b = c.recall(&req(20, vec![5])).unwrap();
+    assert_eq!(a.runs[0].recall, b.runs[0].recall);
+
+    // A filter that matches nothing leaves no true neighbours to find.
+    let mut none = req(10, vec![5]);
+    none.filter = Some(filter(json!({"must": [{"key": "n", "match": 9}]})));
+    assert_eq!(c.recall(&none).unwrap().runs[0].recall, None);
+
+    for bad in [
+        RecallRequest {
+            samples: 0,
+            ..req(1, vec![5])
+        },
+        RecallRequest {
+            samples: MAX_RECALL_SAMPLES + 1,
+            ..req(1, vec![5])
+        },
+        RecallRequest {
+            limit: 0,
+            ..req(1, vec![5])
+        },
+        RecallRequest {
+            limit: MAX_RECALL_LIMIT + 1,
+            ..req(1, vec![200])
+        },
+        req(1, vec![]),
+        req(1, vec![4]),
+        req(1, vec![MAX_HNSW_EF + 1]),
+        req(1, vec![5; MAX_RECALL_EF_VALUES + 1]),
+    ] {
+        assert!(
+            matches!(c.recall(&bad), Err(QueryError::Invalid(_))),
+            "{bad:?}"
+        );
+    }
+}
+
+#[test]
+fn status_reports_segments_and_the_memtable() {
+    let dir = TempDir::new().unwrap();
+    let c = create(dir.path(), Distance::Cosine);
+    c.upsert(
+        (1..=4)
+            .map(|i| point(i, [1.0, i as f32], json!({})))
+            .collect(),
+        Ack::Durable,
+    )
+    .unwrap();
+    c.flush().unwrap();
+    c.delete(&Selector::Ids(vec![PointId::Num(1)]), Ack::Durable)
+        .unwrap();
+    let s = c.status();
+    assert_eq!(s.segments.len(), 1);
+    let seg = &s.segments[0];
+    assert_eq!((seg.rows, seg.live), (4, 3));
+    assert_eq!(seg.vector_bytes, 4 * 2 * 4);
+    assert!(seg.disk_bytes >= seg.vector_bytes);
+    assert_eq!(seg.graph_nodes, Some(4));
+    assert!(seg.graph_bytes > 0);
+    assert_eq!(s.memtable_entries, 1);
+    assert!(s.memtable_bytes > 0);
+    assert_eq!(s.frozen_entries, 0);
+    assert_eq!(c.optimizer_options(), None);
+}
+
+#[test]
+fn status_counts_a_memtable_left_by_a_failed_flush() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new().unwrap();
+    let c = create(dir.path(), Distance::Dot);
+    c.upsert(vec![point(1, [1.0, 0.0], json!({}))], Ack::Durable)
+        .unwrap();
+    let segments = dir.path().join("segments");
+    let mode = |m| fs::set_permissions(&segments, fs::Permissions::from_mode(m)).unwrap();
+    mode(0o555);
+    let failed = c.flush();
+    mode(0o755);
+    assert!(failed.is_err());
+    let s = c.status();
+    assert_eq!((s.memtable_entries, s.frozen_entries), (0, 1));
+    assert!(s.segments.is_empty());
+    // The next flush retries it.
+    c.flush().unwrap();
+    let s = c.status();
+    assert_eq!((s.frozen_entries, s.segments.len()), (0, 1));
 }

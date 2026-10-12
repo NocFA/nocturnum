@@ -2,7 +2,7 @@
 //!
 //! With keys configured, every request but the health checks needs one, sent as
 //! `Authorization: Bearer <key>`. The admin key can do everything, and the read-only key can
-//! send `GET` requests and the four point reads that use `POST`.
+//! send `GET` requests and the five point reads that use `POST`.
 //!
 //! Without keys the server only listens on loopback unless told otherwise, and then any web
 //! page the owner opens could try to reach it:
@@ -33,10 +33,23 @@ pub(crate) struct Keys {
     read_only: Option<[u8; 32]>,
 }
 
+/// What a request may do, which the guard records in the request's extensions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Access {
+pub(crate) enum Access {
     Admin,
     ReadOnly,
+    /// No keys are configured, so every request that passes the host check may do anything.
+    Anonymous,
+}
+
+impl Access {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Access::Admin => "admin",
+            Access::ReadOnly => "read-only",
+            Access::Anonymous => "anonymous",
+        }
+    }
 }
 
 fn digest(key: &str) -> [u8; 32] {
@@ -59,6 +72,11 @@ impl Keys {
 
     pub(crate) fn anonymous(&self) -> bool {
         self.admin.is_none() && self.read_only.is_none()
+    }
+
+    /// Which keys are configured, as `(admin, read_only)`.
+    pub(crate) fn configured(&self) -> (bool, bool) {
+        (self.admin.is_some(), self.read_only.is_some())
     }
 
     fn check(&self, key: &str) -> Option<Access> {
@@ -101,7 +119,7 @@ fn read_only_allows(method: &Method, path: &str) -> bool {
                 "collections",
                 _,
                 "points",
-                "search" | "scroll" | "count" | "get"
+                "search" | "scroll" | "count" | "get" | "recall"
             ]
         )
 }
@@ -155,7 +173,7 @@ fn host_allowed(host: &str, allowed: &[String]) -> bool {
 }
 
 /// Middleware that checks the key, or the host when no keys are configured.
-pub(crate) async fn guard(State(api): State<Arc<Api>>, req: Request, next: Next) -> Response {
+pub(crate) async fn guard(State(api): State<Arc<Api>>, mut req: Request, next: Next) -> Response {
     if api.keys.anonymous() {
         if let Some(host) = request_host(&req)
             && !host_allowed(&host, &api.allowed_hosts)
@@ -179,6 +197,7 @@ pub(crate) async fn guard(State(api): State<Arc<Api>>, req: Request, next: Next)
             )
             .into_response();
         }
+        req.extensions_mut().insert(Access::Anonymous);
         return next.run(req).await;
     }
     let Some(access) = bearer(req.headers()).and_then(|k| api.keys.check(k)) else {
@@ -197,6 +216,7 @@ pub(crate) async fn guard(State(api): State<Arc<Api>>, req: Request, next: Next)
         )
         .into_response();
     }
+    req.extensions_mut().insert(access);
     next.run(req).await
 }
 
@@ -233,6 +253,10 @@ mod tests {
     fn read_only_paths() {
         let p = "/v1/collections/notes/points/search";
         assert!(read_only_allows(&Method::POST, p));
+        assert!(read_only_allows(
+            &Method::POST,
+            "/v1/collections/notes/points/recall"
+        ));
         assert!(read_only_allows(&Method::GET, "/v1/collections"));
         assert!(!read_only_allows(&Method::PUT, p));
         assert!(!read_only_allows(

@@ -146,3 +146,41 @@ mod tests {
         assert!(made.is_err() && again.is_err() && !left, "{relative:?}");
     }
 }
+
+/// The size of the disk holding a path and the bytes this process may still write there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiskSpace {
+    pub total: u64,
+    pub available: u64,
+}
+
+/// How big the disk holding `path` is and how much of it is free for this process, when
+/// the platform says.
+pub fn disk_space(path: &Path) -> Option<DiskSpace> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+        let mut st = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+        // SAFETY: `c` is a valid NUL-terminated path and `st` is a properly sized out-param.
+        let rc = unsafe { libc::statvfs(c.as_ptr(), st.as_mut_ptr()) };
+        if rc != 0 {
+            return None;
+        }
+        // SAFETY: statvfs returned 0, so it filled `st`.
+        let st = unsafe { st.assume_init() };
+        // The field types differ between platforms, so the casts are not always no-ops.
+        #[allow(clippy::unnecessary_cast)]
+        let frag = st.f_frsize as u64;
+        #[allow(clippy::unnecessary_cast)]
+        Some(DiskSpace {
+            total: (st.f_blocks as u64).saturating_mul(frag),
+            available: (st.f_bavail as u64).saturating_mul(frag),
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
+}

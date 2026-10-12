@@ -423,6 +423,16 @@ impl Registry {
         Ok(())
     }
 
+    /// Where collections live, `collections` in the data directory.
+    pub fn collections_dir(&self) -> &Path {
+        &self.collections_dir
+    }
+
+    /// Where snapshots are kept.
+    pub fn snapshots_dir(&self) -> &Path {
+        &self.snapshots_dir
+    }
+
     /// Collections out of service until a restart, with the reason.
     pub fn lost(&self) -> Vec<(String, String)> {
         lock(&self.lost)

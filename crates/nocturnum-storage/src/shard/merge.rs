@@ -249,7 +249,7 @@ impl Shard {
     /// Refuses a rebuild unless the disk has twice the inputs' size free.
     fn check_disk(&self, inputs: &[Input]) -> Result<()> {
         let need: u64 = inputs.iter().map(|i| i.segment.disk_bytes()).sum::<u64>() * 2;
-        match free_bytes(&self.dir) {
+        match crate::sync::disk_space(&self.dir).map(|d| d.available) {
             Some(free) if free < need => Err(Error::Invalid(format!(
                 "{}: rewriting segments needs {need} bytes free, the disk has {free}",
                 self.dir.display()
@@ -378,29 +378,4 @@ fn merged_entries(inputs: &[Input], from_oldest: bool) -> impl Iterator<Item = E
             }),
         }
     })
-}
-
-/// The bytes free for this process on the disk holding `path`, when the platform says.
-fn free_bytes(path: &Path) -> Option<u64> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
-        let mut st = std::mem::MaybeUninit::<libc::statvfs>::uninit();
-        // SAFETY: `c` is a valid NUL-terminated path and `st` is a properly sized out-param.
-        let rc = unsafe { libc::statvfs(c.as_ptr(), st.as_mut_ptr()) };
-        if rc != 0 {
-            return None;
-        }
-        // SAFETY: statvfs returned 0, so it filled `st`.
-        let st = unsafe { st.assume_init() };
-        // The field types differ between platforms, so the casts are not always no-ops.
-        #[allow(clippy::unnecessary_cast)]
-        Some((st.f_bavail as u64).saturating_mul(st.f_frsize as u64))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        None
-    }
 }

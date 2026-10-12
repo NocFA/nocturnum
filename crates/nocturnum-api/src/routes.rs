@@ -5,19 +5,20 @@ use std::sync::Arc;
 use axum::Json;
 use axum::Router;
 use axum::body::Body as HttpBody;
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use nocturnum_core::{PayloadIndexSpec, PointId, VectorConfig};
 use nocturnum_query::collection::MAX_RESULT_WINDOW;
-use nocturnum_query::{Collection, ScrollRequest, SearchRequest, WithPayload};
-use nocturnum_storage::PointWrite;
+use nocturnum_query::{Collection, RecallRequest, ScrollRequest, SearchRequest, WithPayload};
+use nocturnum_storage::{Job, PointWrite};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio_util::io::ReaderStream;
 
 use crate::Api;
+use crate::auth::Access;
 use crate::dto::*;
 use crate::error::ApiError;
 use crate::extract::{Body, Params};
@@ -97,6 +98,8 @@ pub(crate) fn routes() -> Router<Arc<Api>> {
         .route(&format!("{c}/points/scroll"), post(scroll))
         .route(&format!("{c}/points/count"), post(count))
         .route(&format!("{c}/points/search"), post(search))
+        .route(&format!("{c}/points/recall"), post(recall))
+        .route(&format!("{c}/status"), get(collection_status))
         .route(&format!("{c}/points/payload/set"), post(set_payload))
         .route(
             &format!("{c}/points/payload/overwrite"),
@@ -181,11 +184,32 @@ async fn metrics(State(api): Shared) -> Result<Response, ApiError> {
         .into_response())
 }
 
-async fn version(State(api): Shared) -> Result<Json<Value>, ApiError> {
-    api.registry()?;
-    Ok(Json(
-        json!({"name": "nocturnum", "version": env!("CARGO_PKG_VERSION")}),
-    ))
+fn disk(path: &std::path::Path) -> Value {
+    match nocturnum_storage::disk_space(path) {
+        Some(d) => json!({"total_bytes": d.total, "available_bytes": d.available}),
+        None => Value::Null,
+    }
+}
+
+async fn version(State(api): Shared, Extension(access): Extension<Access>) -> Reply {
+    let (admin, read_only) = api.keys.configured();
+    let started_at = crate::registry::rfc3339(api.started_at);
+    let uptime = api.started.elapsed().as_secs();
+    with_registry(&api, move |r| {
+        Ok(json!({
+            "name": "nocturnum",
+            "version": env!("CARGO_PKG_VERSION"),
+            "started_at": started_at,
+            "uptime_seconds": uptime,
+            "role": access.as_str(),
+            "keys": {"admin": admin, "read_only": read_only},
+            "disk": {
+                "collections": disk(r.collections_dir()),
+                "snapshots": disk(r.snapshots_dir()),
+            },
+        }))
+    })
+    .await
 }
 
 // Collections.
@@ -198,6 +222,9 @@ async fn list_collections(State(api): Shared) -> Reply {
             .map(|(name, c)| CollectionSummary {
                 name,
                 points: c.len(),
+                vectors: c.config(),
+                segments: c.segment_count(),
+                failure: c.failure(),
             })
             .collect();
         Ok(json!({ "collections": list }))
@@ -226,6 +253,73 @@ async fn describe_collection(State(api): Shared, Path(name): Path<String>) -> Re
             segments: c.segment_count(),
             indexes: c.payload_indexes(),
         })
+    })
+    .await
+}
+
+async fn collection_status(State(api): Shared, Path(name): Path<String>) -> Reply {
+    with_collection(&api, name, |c| {
+        let status = c.status();
+        let wal = c.wal_stats();
+        let optimizer = c.optimizer_status();
+        let options = c.optimizer_options();
+        let graph = status.options.graph;
+        let segments: Vec<Value> = status
+            .segments
+            .iter()
+            .map(|s| {
+                json!({
+                    "id": s.id,
+                    "rows": s.rows,
+                    "live": s.live,
+                    "index": if s.graph_nodes.is_some() { "hnsw" } else { "plain" },
+                    "graph_bytes": s.graph_bytes,
+                    "vector_bytes": s.vector_bytes,
+                    "disk_bytes": s.disk_bytes,
+                })
+            })
+            .collect();
+        let segment_disk: u64 = status.segments.iter().map(|s| s.disk_bytes).sum();
+        let job = |j: &Job| match j {
+            Job::Flush => json!({"kind": "flush"}),
+            Job::Merge { inputs, output } => {
+                json!({"kind": "merge", "inputs": inputs, "output": output})
+            }
+            Job::Vacuum { input, output } => {
+                json!({"kind": "vacuum", "inputs": [input], "output": output})
+            }
+        };
+        Ok(json!({
+            "points": c.len(),
+            "failure": c.failure(),
+            "segments": segments,
+            "memtable": {
+                "entries": status.memtable_entries,
+                "bytes": status.memtable_bytes,
+                "flush_bytes": status.options.flush_bytes,
+                "frozen_entries": status.frozen_entries,
+            },
+            "wal": {
+                "bytes": wal.disk_bytes,
+                "last_seq": wal.last_seq,
+                "fsyncs": wal.syncs,
+            },
+            "index": {
+                "m": graph.config.m,
+                "ef_construct": graph.config.ef_construct,
+                "min_bytes": graph.min_bytes,
+                "default_ef": nocturnum_query::collection::DEFAULT_HNSW_EF,
+            },
+            "optimizer": {
+                "enabled": options.is_some(),
+                "max_segments": options.map(|o| o.max_segments),
+                "vacuum_ratio": options.map(|o| o.vacuum_ratio),
+                "running": optimizer.running,
+                "last": optimizer.last.as_ref().map(job),
+                "last_error": optimizer.last_error,
+            },
+            "disk_bytes": segment_disk + wal.disk_bytes,
+        }))
     })
     .await
 }
@@ -360,6 +454,34 @@ async fn clear_payload(
 }
 
 // Reads.
+
+async fn recall(State(api): Shared, Path(name): Path<String>, Body(body): Body<Recall>) -> Reply {
+    with_collection(&api, name, move |c| {
+        let req = RecallRequest {
+            samples: body.samples,
+            limit: body.limit,
+            hnsw_ef: body.widths(),
+            filter: body.filter,
+            seed: body.seed,
+        };
+        let r = c.recall(&req).map_err(|e| ApiError::from_query(c, e))?;
+        let ms = |d: std::time::Duration| (d.as_secs_f64() * 1e6).round() / 1e3;
+        Ok(json!({
+            "samples": r.samples,
+            "limit": r.limit,
+            "points": r.points,
+            "indexed_points": r.indexed_points,
+            "exact": {"p50_ms": ms(r.exact_p50), "p99_ms": ms(r.exact_p99)},
+            "runs": r.runs.iter().map(|x| json!({
+                "hnsw_ef": x.hnsw_ef,
+                "recall": x.recall,
+                "p50_ms": ms(x.p50),
+                "p99_ms": ms(x.p99),
+            })).collect::<Vec<_>>(),
+        }))
+    })
+    .await
+}
 
 async fn get_point(
     State(api): Shared,
