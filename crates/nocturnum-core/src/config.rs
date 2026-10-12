@@ -39,6 +39,8 @@ pub enum PayloadIndexKind {
     Float,
     /// Booleans, for `match`, `any` and `except` on booleans.
     Bool,
+    /// Words in strings, for ranking text searches with BM25, see `nocturnum_index::text`.
+    Text,
 }
 
 /// One payload index: a field and the kind of index it gets.

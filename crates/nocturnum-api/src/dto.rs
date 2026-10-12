@@ -249,7 +249,9 @@ pub struct Count {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Search {
-    pub vector: Vec<f32>,
+    /// Exactly one of `vector` and `text` says what to rank by.
+    pub vector: Option<Vec<f32>>,
+    pub text: Option<TextIn>,
     pub filter: Option<Filter>,
     #[serde(default = "ten")]
     pub limit: usize,
@@ -263,6 +265,16 @@ pub struct Search {
     pub with_payload: WithPayloadIn,
     #[serde(default)]
     pub with_vector: bool,
+}
+
+/// A text search's words and BM25 knobs.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextIn {
+    pub field: JsonPath,
+    pub query: String,
+    pub k1: Option<f64>,
+    pub b: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]

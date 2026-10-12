@@ -109,6 +109,7 @@
 							<option value="integer">integer</option>
 							<option value="float">float</option>
 							<option value="bool">bool</option>
+							<option value="text">text</option>
 						</select>
 						<div class="add-row">
 							<button type="button" class="btn sm ghost" onclick={() => (adding = false)}>Cancel</button>

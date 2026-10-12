@@ -38,7 +38,7 @@ export interface CollectionSummary {
 
 export interface IndexSpec {
 	path: string;
-	kind: 'keyword' | 'integer' | 'float' | 'bool';
+	kind: 'keyword' | 'integer' | 'float' | 'bool' | 'text';
 }
 
 export interface CollectionInfo {

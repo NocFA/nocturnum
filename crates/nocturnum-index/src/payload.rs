@@ -24,6 +24,8 @@ use nocturnum_core::{Condition, Filter, JsonPath, MatchValue, Payload, PayloadIn
 use roaring::RoaringBitmap;
 use serde_json::Value;
 
+use crate::text::TextIndex;
+
 /// What a filter can match, from the indexes alone. `sure` is always a subset of `maybe`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Bounds {
@@ -103,6 +105,8 @@ struct FieldIndex {
     numbers: Option<Vec<(f64, u32)>>,
     /// Rows holding `false`, then rows holding `true`.
     bools: Option<[RoaringBitmap; 2]>,
+    /// Words in the field's strings, for ranking rather than filtering.
+    text: Option<TextIndex>,
 }
 
 #[derive(Default)]
@@ -148,6 +152,9 @@ impl PayloadIndex {
                 PayloadIndexKind::Bool => {
                     f.bools.get_or_insert_default();
                 }
+                PayloadIndexKind::Text => {
+                    f.text.get_or_insert_default();
+                }
             }
         }
 
@@ -180,6 +187,11 @@ impl PayloadIndex {
     /// Every row, matching or not.
     pub fn universe(&self) -> &RoaringBitmap {
         &self.universe
+    }
+
+    /// The text index on `path`, when the field has one.
+    pub fn text(&self, path: &JsonPath) -> Option<&TextIndex> {
+        self.fields.get(path)?.text.as_ref()
     }
 
     /// The rows `filter` surely matches and the rows it may match.
@@ -347,6 +359,9 @@ impl FieldIndex {
         }
         if values.iter().any(|v| v.is_null()) {
             self.has_null.insert(row);
+        }
+        if let Some(t) = &mut self.text {
+            t.add(row, values);
         }
         for v in values {
             match v {

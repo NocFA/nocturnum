@@ -29,7 +29,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use nocturnum_core::payload::PathStep;
-use nocturnum_core::{Ack, Filter, JsonPath, Payload, PayloadIndexSpec, PointId, VectorConfig};
+use nocturnum_core::{
+    Ack, Distance, Filter, JsonPath, Payload, PayloadIndexSpec, PointId, VectorConfig,
+};
 use nocturnum_index::flat::search_filtered;
 
 pub use recall::{
@@ -38,7 +40,7 @@ pub use recall::{
 };
 
 use crate::plan::{PlanOptions, Strategy, choose};
-use nocturnum_index::{Bounds, TopK};
+use nocturnum_index::{Bm25, Bounds, Scored, TopK};
 use nocturnum_storage::{
     Operation, Optimizer, OptimizerOptions, OptimizerStatus, PointRef, PointWrite, SegmentView,
     Shard, ShardOptions, ShardRecovery, ShardStatus, SnapshotInfo, View, WalStats, WriteError,
@@ -67,6 +69,12 @@ pub enum QueryError {
     Input(#[from] nocturnum_core::Error),
     #[error(transparent)]
     Storage(#[from] nocturnum_storage::Error),
+    /// A text search named a field without a text index.
+    #[error("{0} has no text index, create one with kind text to search it")]
+    NoTextIndex(JsonPath),
+    /// A text query has more than [`MAX_QUERY_TERMS`] different words.
+    #[error("a text query may have at most {MAX_QUERY_TERMS} different words")]
+    TooManyWords,
     /// The work ran out of the time it is allowed, and nothing was changed.
     #[error("{0}")]
     TimedOut(String),
@@ -75,7 +83,13 @@ pub enum QueryError {
 impl QueryError {
     /// Whether the request was refused for what it asked, rather than failing in storage.
     pub fn is_invalid(&self) -> bool {
-        matches!(self, QueryError::Invalid(_) | QueryError::Input(_))
+        matches!(
+            self,
+            QueryError::Invalid(_)
+                | QueryError::Input(_)
+                | QueryError::NoTextIndex(_)
+                | QueryError::TooManyWords
+        )
     }
 }
 
@@ -128,16 +142,37 @@ pub struct ScoredPoint {
     pub vector: Option<Vec<f32>>,
 }
 
+/// What a search ranks points by.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Query {
+    /// Nearness to a dense vector, by the collection's distance.
+    Vector(Vec<f32>),
+    /// BM25 relevance to some words, over a field with a text index.
+    Text(TextQuery),
+}
+
+/// A text search, see `nocturnum_index::text` for how it scores.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextQuery {
+    /// A field with a text index.
+    pub field: JsonPath,
+    /// The words to look for.
+    pub query: String,
+    pub bm25: Bm25,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchRequest {
-    pub vector: Vec<f32>,
+    pub query: Query,
     pub filter: Option<Filter>,
     pub limit: usize,
     /// Results to skip before the first one returned.
     pub offset: usize,
-    /// Drops results below this similarity, or above this distance for euclid and manhattan.
+    /// Drops results below this similarity or text score, or above this distance for euclid
+    /// and manhattan.
     pub score_threshold: Option<f32>,
-    /// Scans every candidate instead of walking segments' graphs, exact but slower.
+    /// Scans every candidate instead of walking segments' graphs, exact but slower. Text
+    /// search is always exact.
     pub exact: bool,
     /// The beam width for graph search, higher finds more of the true nearest points more
     /// slowly, [`DEFAULT_HNSW_EF`] when not given and never below `offset + limit`.
@@ -149,8 +184,13 @@ pub struct SearchRequest {
 impl SearchRequest {
     /// A plain search for the `limit` nearest points.
     pub fn new(vector: Vec<f32>, limit: usize) -> SearchRequest {
+        SearchRequest::of(Query::Vector(vector), limit)
+    }
+
+    /// A plain search for the `limit` best points by `query`.
+    pub fn of(query: Query, limit: usize) -> SearchRequest {
         SearchRequest {
-            vector,
+            query,
             filter: None,
             limit,
             offset: 0,
@@ -422,7 +462,7 @@ impl Collection {
         Ok(ScrollPage { points, next })
     }
 
-    /// The best matches for a vector, best first.
+    /// The best matches for a vector or some words, best first.
     pub fn search(&self, req: &SearchRequest) -> Result<Vec<ScoredPoint>> {
         self.search_in(&self.shard.view(), req)
     }
@@ -437,6 +477,7 @@ impl Collection {
             )));
         }
         if let Some(ef) = req.hnsw_ef
+            && matches!(req.query, Query::Vector(_))
             && !(1..=MAX_HNSW_EF).contains(&ef)
         {
             return Err(QueryError::Invalid(format!(
@@ -447,66 +488,26 @@ impl Collection {
         if let Some(f) = &req.filter {
             f.validate()?;
         }
-        let VectorConfig { dim, distance } = self.shard.config();
-        let query = distance.prepare(dim, req.vector.clone())?;
-        if window == 0 {
-            return Ok(Vec::new());
-        }
-
-        let mut top = TopK::new(window);
-        for p in view.recent() {
-            let score = distance.score(&query, p.vector);
-            if top.would_keep(&p.id, score)
-                && req
-                    .filter
-                    .as_ref()
-                    .map_or(Ok(true), |f| p.payload().map(|pl| f.matches(p.id, &pl)))?
-            {
-                top.push(p.id, score);
+        let (top, scale) = match &req.query {
+            Query::Vector(vector) => {
+                let VectorConfig { dim, distance } = self.shard.config();
+                let query = distance.prepare(dim, vector.clone())?;
+                (
+                    self.rank_vector(view, &query, req, window)?,
+                    Scale::Distance(distance),
+                )
             }
-        }
-        let ef = req.hnsw_ef.unwrap_or(DEFAULT_HNSW_EF).max(window);
-        for seg in view.segments() {
-            let bounds = segment_bounds(&seg, req.filter.as_ref());
-            let check = |row| match &req.filter {
-                Some(f) => row_matches(&seg, f, row),
-                None => Ok(true),
-            };
-            let vectors = seg.vectors();
-            let graph = seg.graph().filter(|_| !req.exact);
-            // Rows are in id order within a segment, so ties cut inside it keep the same ids
-            // the merge would.
-            let hits = match graph {
-                None => search_filtered(distance, vectors, dim, &query, window, &bounds, check)?,
-                Some(g) => {
-                    let plan = choose(bounds, &self.plan, check)?;
-                    let b = &plan.bounds;
-                    match plan.strategy {
-                        Strategy::Enumerate => {
-                            search_filtered(distance, vectors, dim, &query, window, b, check)?
-                        }
-                        Strategy::Graph => g.search(vectors, &query, window, ef, |row| {
-                            if b.sure.contains(row) {
-                                Ok(true)
-                            } else if b.maybe.contains(row) {
-                                check(row)
-                            } else {
-                                Ok(false)
-                            }
-                        })?,
-                    }
-                }
-            };
-            for h in hits {
-                top.push(seg.point(h.key).id, h.score);
-            }
-        }
+            Query::Text(q) => (
+                text::rank(view, q, req.filter.as_ref(), window)?,
+                Scale::Bm25,
+            ),
+        };
 
         let mut out = Vec::new();
-        for s in top.into_sorted_vec().into_iter().skip(req.offset) {
-            let score = distance.to_user(s.score);
+        for s in top.into_iter().skip(req.offset) {
+            let score = scale.to_user(s.score);
             if let Some(t) = req.score_threshold {
-                let passes = if distance.user_higher_is_better() {
+                let passes = if scale.higher_is_better() {
                     score >= t
                 } else {
                     score <= t
@@ -537,6 +538,69 @@ impl Collection {
         Ok(out)
     }
 
+    /// The best `window` points for a prepared vector, best first, with internal scores.
+    fn rank_vector(
+        &self,
+        view: &View,
+        query: &[f32],
+        req: &SearchRequest,
+        window: usize,
+    ) -> Result<Vec<Scored<PointId>>> {
+        let VectorConfig { dim, distance } = self.shard.config();
+        if window == 0 {
+            return Ok(Vec::new());
+        }
+        let mut top = TopK::new(window);
+        for p in view.recent() {
+            let score = distance.score(query, p.vector);
+            if top.would_keep(&p.id, score)
+                && req
+                    .filter
+                    .as_ref()
+                    .map_or(Ok(true), |f| p.payload().map(|pl| f.matches(p.id, &pl)))?
+            {
+                top.push(p.id, score);
+            }
+        }
+        let ef = req.hnsw_ef.unwrap_or(DEFAULT_HNSW_EF).max(window);
+        for seg in view.segments() {
+            let bounds = segment_bounds(&seg, req.filter.as_ref());
+            let check = |row| match &req.filter {
+                Some(f) => row_matches(&seg, f, row),
+                None => Ok(true),
+            };
+            let vectors = seg.vectors();
+            let graph = seg.graph().filter(|_| !req.exact);
+            // Rows are in id order within a segment, so ties cut inside it keep the same ids
+            // the merge would.
+            let hits = match graph {
+                None => search_filtered(distance, vectors, dim, query, window, &bounds, check)?,
+                Some(g) => {
+                    let plan = choose(bounds, &self.plan, check)?;
+                    let b = &plan.bounds;
+                    match plan.strategy {
+                        Strategy::Enumerate => {
+                            search_filtered(distance, vectors, dim, query, window, b, check)?
+                        }
+                        Strategy::Graph => g.search(vectors, query, window, ef, |row| {
+                            if b.sure.contains(row) {
+                                Ok(true)
+                            } else if b.maybe.contains(row) {
+                                check(row)
+                            } else {
+                                Ok(false)
+                            }
+                        })?,
+                    }
+                }
+            };
+            for h in hits {
+                top.push(seg.point(h.key).id, h.score);
+            }
+        }
+        Ok(top.into_sorted_vec())
+    }
+
     /// Logs the operation `make` builds for the selected ids, resolving a filter under the
     /// shard's write lock so the ids are exactly the matching points at that moment.
     fn write_selected(
@@ -553,6 +617,29 @@ impl Collection {
                     Ok(make(smallest_matching(view, Some(f), None, usize::MAX)?))
                 })?)
             }
+        }
+    }
+}
+
+/// How a ranking's internal scores, where higher is always better, read in the API.
+#[derive(Debug, Clone, Copy)]
+enum Scale {
+    Distance(Distance),
+    Bm25,
+}
+
+impl Scale {
+    fn to_user(self, score: f32) -> f32 {
+        match self {
+            Scale::Distance(d) => d.to_user(score),
+            Scale::Bm25 => score,
+        }
+    }
+
+    fn higher_is_better(self) -> bool {
+        match self {
+            Scale::Distance(d) => d.user_higher_is_better(),
+            Scale::Bm25 => true,
         }
     }
 }
@@ -709,3 +796,6 @@ fn remove(map: &mut Map<String, Value>, path: &[&str]) {
 mod recall;
 #[cfg(test)]
 mod tests;
+mod text;
+
+pub use text::MAX_QUERY_TERMS;

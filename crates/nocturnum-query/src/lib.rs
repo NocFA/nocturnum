@@ -4,7 +4,8 @@ pub mod collection;
 pub mod plan;
 
 pub use collection::{
-    Collection, Point, QueryError, RecallReport, RecallRequest, RecallRun, ScoredPoint, ScrollPage,
-    ScrollRequest, SearchRequest, Selector, WithPayload,
+    Collection, Point, Query, QueryError, RecallReport, RecallRequest, RecallRun, ScoredPoint,
+    ScrollPage, ScrollRequest, SearchRequest, Selector, TextQuery, WithPayload,
 };
+pub use nocturnum_index::text::Bm25;
 pub use plan::{Estimate, Plan, PlanOptions, Strategy};

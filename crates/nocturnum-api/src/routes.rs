@@ -11,7 +11,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use nocturnum_core::{PayloadIndexSpec, PointId, VectorConfig};
 use nocturnum_query::collection::MAX_RESULT_WINDOW;
-use nocturnum_query::{Collection, RecallRequest, ScrollRequest, SearchRequest, WithPayload};
+use nocturnum_query::{
+    Bm25, Collection, Query, QueryError, RecallRequest, ScrollRequest, SearchRequest, TextQuery,
+    WithPayload,
+};
 use nocturnum_storage::{Job, PointWrite};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -527,7 +530,7 @@ async fn get_points(
     with_collection(&api, name, move |c| {
         let points = c
             .retrieve(&body.ids, &body.with_payload.0, body.with_vector)
-            .map_err(|e| ApiError::from_query(c, e))?;
+            .map_err(|e| query_error(c, e, "text"))?;
         Ok(Points {
             points: points.into_iter().map(PointOut::from).collect(),
         })
@@ -566,13 +569,24 @@ async fn count(State(api): Shared, Path(name): Path<String>, Body(body): Body<Co
 
 async fn search(State(api): Shared, Path(name): Path<String>, Body(body): Body<Search>) -> Reply {
     with_collection(&api, name, move |c| {
-        let VectorConfig { dim, distance } = c.config();
-        distance
-            .check(dim, &body.vector)
-            .map_err(|e| ApiError::from(e).at("vector"))?;
+        let query = match (body.vector, body.text) {
+            (Some(vector), None) => {
+                let VectorConfig { dim, distance } = c.config();
+                distance
+                    .check(dim, &vector)
+                    .map_err(|e| ApiError::from(e).at("vector"))?;
+                Query::Vector(vector)
+            }
+            (None, Some(text)) => Query::Text(text_query(text, "text")?),
+            _ => {
+                return Err(ApiError::invalid(
+                    "a search needs exactly one of vector and text",
+                ));
+            }
+        };
         let points = c
             .search(&SearchRequest {
-                vector: body.vector,
+                query,
                 filter: body.filter,
                 limit: body.limit,
                 offset: body.offset,
@@ -582,12 +596,44 @@ async fn search(State(api): Shared, Path(name): Path<String>, Body(body): Body<S
                 with_payload: body.with_payload.0,
                 with_vector: body.with_vector,
             })
-            .map_err(|e| ApiError::from_query(c, e))?;
+            .map_err(|e| query_error(c, e, "text"))?;
         Ok(Points {
             points: points.into_iter().map(ScoredOut::from).collect(),
         })
     })
     .await
+}
+
+/// Maps a search error, pointing text-query errors inside `at`.
+fn query_error(c: &Collection, e: QueryError, at: &str) -> ApiError {
+    let field = match &e {
+        QueryError::NoTextIndex(_) => Some("field"),
+        QueryError::TooManyWords => Some("query"),
+        _ => None,
+    };
+    let error = ApiError::from_query(c, e);
+    match field {
+        Some(f) => error.at(format!("{at}.{f}")),
+        None => error,
+    }
+}
+
+/// A text search from its request body, checking the BM25 knobs where `at` names them.
+fn text_query(text: TextIn, at: &str) -> Result<TextQuery, ApiError> {
+    let default = Bm25::default();
+    let bm25 = Bm25 {
+        k1: text.k1.unwrap_or(default.k1),
+        b: text.b.unwrap_or(default.b),
+    };
+    if let Err(e) = bm25.validate() {
+        let knob = if e.starts_with("k1") { "k1" } else { "b" };
+        return Err(ApiError::invalid(e).at(format!("{at}.{knob}")));
+    }
+    Ok(TextQuery {
+        field: text.field,
+        query: text.query,
+        bm25,
+    })
 }
 
 // Payload indexes.

@@ -796,7 +796,7 @@ async fn payload_indexes() {
     let (status, v) = s
         .put(
             "/v1/collections/c/indexes",
-            json!({"path": "tags", "kind": "text"}),
+            json!({"path": "tags", "kind": "geo"}),
         )
         .await;
     assert_eq!(
@@ -821,6 +821,74 @@ async fn payload_indexes() {
         s.post("/v1/collections/c/indexes/delete", spec).await.1,
         json!({"deleted": false})
     );
+}
+
+#[tokio::test]
+async fn text_search_ranks_by_bm25() {
+    let s = start().await;
+    s.create("c", 2, "dot").await;
+    let points = json!({"points": [
+        {"id": 1, "vector": [0.0, 1.0], "payload": {"body": "The red fox", "n": 1}},
+        {"id": 2, "vector": [1.0, 0.0], "payload": {"body": ["red hen", "red barn"], "n": 2}},
+        {"id": 3, "vector": [1.0, 1.0], "payload": {"body": "a quiet night", "n": 3}}
+    ]});
+    assert_eq!(
+        s.put("/v1/collections/c/points", points).await.0,
+        StatusCode::OK
+    );
+    let search = |body: Value| async { s.post("/v1/collections/c/points/search", body).await };
+
+    let (status, v) = search(json!({"text": {"field": "body", "query": "red"}})).await;
+    assert_eq!(
+        (status, code(&v), v["error"]["at"].as_str()),
+        (
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            Some("text.field")
+        )
+    );
+    let index = json!({"path": "body", "kind": "text"});
+    assert_eq!(
+        s.put("/v1/collections/c/indexes", index).await.1,
+        json!({"created": true})
+    );
+
+    let (status, v) =
+        search(json!({"text": {"field": "body", "query": "Red"}, "with_payload": false})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ids(&v), [json!(2), json!(1)]);
+    assert!(v["points"][0]["score"].as_f64().unwrap() > v["points"][1]["score"].as_f64().unwrap());
+    let (_, v) = search(json!({
+        "text": {"field": "body", "query": "red", "k1": 2.0, "b": 0.0},
+        "filter": {"must": [{"key": "n", "match": 1}]}
+    }))
+    .await;
+    assert_eq!(ids(&v), [json!(1)]);
+    assert_eq!(v["points"][0]["payload"]["body"], "The red fox");
+
+    let bad = StatusCode::BAD_REQUEST;
+    let (status, v) = search(json!({"text": {"field": "body", "query": "red", "b": 2}})).await;
+    assert_eq!(
+        (status, code(&v), v["error"]["at"].as_str()),
+        (bad, "invalid_request", Some("text.b"))
+    );
+    let (status, v) =
+        search(json!({"vector": [1.0, 0.0], "text": {"field": "body", "query": "red"}})).await;
+    assert_eq!((status, code(&v)), (bad, "invalid_request"));
+    let (status, v) = search(json!({"limit": 3})).await;
+    assert_eq!((status, code(&v)), (bad, "invalid_request"));
+    let (status, v) = search(json!({"text": {"field": "body", "query": "red", "boost": 2}})).await;
+    assert_eq!((status, code(&v)), (bad, "invalid_request"));
+    let many: Vec<String> = (0..1025).map(|i| format!("w{i}")).collect();
+    let (status, v) = search(json!({"text": {"field": "body", "query": many.join(" ")}})).await;
+    assert_eq!(
+        (status, code(&v), v["error"]["at"].as_str()),
+        (bad, "invalid_request", Some("text.query"))
+    );
+    // hnsw_ef only matters to vector searches.
+    let (status, _) =
+        search(json!({"text": {"field": "body", "query": "red"}, "hnsw_ef": 0})).await;
+    assert_eq!(status, StatusCode::OK);
 }
 
 #[tokio::test]

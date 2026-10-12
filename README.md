@@ -15,14 +15,15 @@ Think of a self-hosted take on [Qdrant](https://qdrant.tech/), rebuilt from scra
 ## What it does
 
 - **Search:** exact search for small or tightly filtered sets and HNSW graphs for large ones, with filters planned against payload indexes.
-- **Filters:** `must`, `should`, `must_not` and `min_should`, with match, any, except, range, null and emptiness checks, value counts, ids and nested arrays, and keyword, integer, float and bool payload indexes to speed them up.
+- **Text search:** BM25 keyword ranking over a payload field, with its statistics counted over the live collection on every query, so they never go stale.
+- **Filters:** `must`, `should`, `must_not` and `min_should`, with match, any, except, range, null and emptiness checks, value counts, ids and nested arrays, and keyword, integer, float and bool payload indexes to speed them up, plus text indexes for keyword ranking.
 - **Durability:** each point write says how sure the answer has to be, durable on disk by default, with crash tests that kill the process mid-write behind every level and power-loss tests still to come.
 - **Backups:** snapshots with checksums that restore while the server keeps running, and a cron schedule per collection that keeps the newest N.
 - **Search quality:** a recall check that runs graph search against exact search at several beam widths, so you can see what a faster setting costs.
 - **Access:** admin and read-only keys, loopback by default, and protection against DNS rebinding and cross-site requests when no keys are set.
 - **Operations:** `/livez`, `/readyz`, Prometheus `/metrics`, engine status per collection and a clean shutdown on SIGINT or SIGTERM.
 
-The engine, the REST server and the console run end to end, with 262 tests passing on macOS and Linux, crash tests included.
+The engine, the REST server and the console run end to end, with 274 tests passing on macOS and Linux, crash tests included.
 
 The console comes with the binary on the same port, for browsing collections, points and payloads, running queries, checking search quality, taking, restoring and scheduling snapshots, watching the engine work and setting keys, with `j` and `k` stepping through points beside their JSON.
 
@@ -39,6 +40,8 @@ nocturnum stores and searches vectors, and making them is the job of an embeddin
 3. To search, embed the question with the same model and send that vector, with a filter if you want one, and the closest points come back with their payloads.
 
 With a good embedding model, a search for "renewing the proxy's certificate" finds a note called "caddy cert rotation", because the two mean the same thing even though they share no words.
+
+Exact words matter too, such as an error code or a hostname, so a `text` index on the field holding a document's text lets a search rank by those words with BM25 instead of a vector.
 
 That makes it the store behind agent memory, search over your notes, bookmarks or documents, matching new log errors against old incidents, or finding photos by description with an image model.
 
@@ -358,7 +361,7 @@ Qdrant's Apache-2.0 source was read to understand how it works, and nocturnum's 
 ## Roadmap
 
 1. gRPC on port 6334, over the same operations as REST.
-2. Scalar quantization, sparse vectors with BM25, optional TLS and OpenAPI docs.
+2. Hybrid queries fusing vector and text searches, sparse vectors, scalar quantization, optional TLS and OpenAPI docs.
 3. Snapshots sent to S3-compatible storage.
 4. Benchmarks and power-loss tests on real hardware.
 5. Cluster and log views in the console, once the engine has clustering and a log endpoint.
