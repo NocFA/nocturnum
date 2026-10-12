@@ -1,0 +1,829 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-12T14:16:19+00:00",
+  "title": "Design System: nocturnum console",
+  "extensions": {
+    "colorMeta": {
+      "ground": {
+        "role": "neutral",
+        "displayName": "Ground",
+        "canonical": "#0b0d12",
+        "tonalRamp": [
+          "oklch(15% 0.011 268.0)",
+          "oklch(26% 0.011 268.0)",
+          "oklch(38% 0.011 268.0)",
+          "oklch(50% 0.011 268.0)",
+          "oklch(62% 0.011 268.0)",
+          "oklch(73% 0.011 268.0)",
+          "oklch(84% 0.011 268.0)",
+          "oklch(95% 0.011 268.0)"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Surface",
+        "canonical": "#0f1218",
+        "tonalRamp": [
+          "oklch(15% 0.013 264.2)",
+          "oklch(26% 0.013 264.2)",
+          "oklch(38% 0.013 264.2)",
+          "oklch(50% 0.013 264.2)",
+          "oklch(62% 0.013 264.2)",
+          "oklch(73% 0.013 264.2)",
+          "oklch(84% 0.013 264.2)",
+          "oklch(95% 0.013 264.2)"
+        ]
+      },
+      "raised": {
+        "role": "neutral",
+        "displayName": "Raised",
+        "canonical": "#141821",
+        "tonalRamp": [
+          "oklch(15% 0.019 266.1)",
+          "oklch(26% 0.019 266.1)",
+          "oklch(38% 0.019 266.1)",
+          "oklch(50% 0.019 266.1)",
+          "oklch(62% 0.019 266.1)",
+          "oklch(73% 0.019 266.1)",
+          "oklch(84% 0.019 266.1)",
+          "oklch(95% 0.019 266.1)"
+        ]
+      },
+      "raised-hover": {
+        "role": "neutral",
+        "displayName": "Raised Hover",
+        "canonical": "#1a1f2a",
+        "tonalRamp": [
+          "oklch(15% 0.022 265.7)",
+          "oklch(26% 0.022 265.7)",
+          "oklch(38% 0.022 265.7)",
+          "oklch(50% 0.022 265.7)",
+          "oklch(62% 0.022 265.7)",
+          "oklch(73% 0.022 265.7)",
+          "oklch(84% 0.022 265.7)",
+          "oklch(95% 0.022 265.7)"
+        ]
+      },
+      "hover": {
+        "role": "neutral",
+        "displayName": "Hover",
+        "canonical": "#171c26",
+        "tonalRamp": [
+          "oklch(15% 0.021 264.0)",
+          "oklch(26% 0.021 264.0)",
+          "oklch(38% 0.021 264.0)",
+          "oklch(50% 0.021 264.0)",
+          "oklch(62% 0.021 264.0)",
+          "oklch(73% 0.021 264.0)",
+          "oklch(84% 0.021 264.0)",
+          "oklch(95% 0.021 264.0)"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#1c212c",
+        "tonalRamp": [
+          "oklch(15% 0.022 265.7)",
+          "oklch(26% 0.022 265.7)",
+          "oklch(38% 0.022 265.7)",
+          "oklch(50% 0.022 265.7)",
+          "oklch(62% 0.022 265.7)",
+          "oklch(73% 0.022 265.7)",
+          "oklch(84% 0.022 265.7)",
+          "oklch(95% 0.022 265.7)"
+        ]
+      },
+      "line-2": {
+        "role": "neutral",
+        "displayName": "Control Line",
+        "canonical": "#262c39",
+        "tonalRamp": [
+          "oklch(15% 0.025 265.5)",
+          "oklch(26% 0.025 265.5)",
+          "oklch(38% 0.025 265.5)",
+          "oklch(50% 0.025 265.5)",
+          "oklch(62% 0.025 265.5)",
+          "oklch(73% 0.025 265.5)",
+          "oklch(84% 0.025 265.5)",
+          "oklch(95% 0.025 265.5)"
+        ]
+      },
+      "line-3": {
+        "role": "neutral",
+        "displayName": "Strong Line",
+        "canonical": "#323a4b",
+        "tonalRamp": [
+          "oklch(15% 0.032 265.1)",
+          "oklch(26% 0.032 265.1)",
+          "oklch(38% 0.032 265.1)",
+          "oklch(50% 0.032 265.1)",
+          "oklch(62% 0.032 265.1)",
+          "oklch(73% 0.032 265.1)",
+          "oklch(84% 0.032 265.1)",
+          "oklch(95% 0.032 265.1)"
+        ]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Text",
+        "canonical": "#e5e7eb",
+        "tonalRamp": [
+          "oklch(15% 0.006 264.5)",
+          "oklch(26% 0.006 264.5)",
+          "oklch(38% 0.006 264.5)",
+          "oklch(50% 0.006 264.5)",
+          "oklch(62% 0.006 264.5)",
+          "oklch(73% 0.006 264.5)",
+          "oklch(84% 0.006 264.5)",
+          "oklch(95% 0.006 264.5)"
+        ]
+      },
+      "text-2": {
+        "role": "neutral",
+        "displayName": "Secondary Text",
+        "canonical": "#a3a9b5",
+        "tonalRamp": [
+          "oklch(15% 0.019 264.5)",
+          "oklch(26% 0.019 264.5)",
+          "oklch(38% 0.019 264.5)",
+          "oklch(50% 0.019 264.5)",
+          "oklch(62% 0.019 264.5)",
+          "oklch(73% 0.019 264.5)",
+          "oklch(84% 0.019 264.5)",
+          "oklch(95% 0.019 264.5)"
+        ]
+      },
+      "text-3": {
+        "role": "neutral",
+        "displayName": "Quiet Text",
+        "canonical": "#7a8191",
+        "tonalRamp": [
+          "oklch(15% 0.026 266.8)",
+          "oklch(26% 0.026 266.8)",
+          "oklch(38% 0.026 266.8)",
+          "oklch(50% 0.026 266.8)",
+          "oklch(62% 0.026 266.8)",
+          "oklch(73% 0.026 266.8)",
+          "oklch(84% 0.026 266.8)",
+          "oklch(95% 0.026 266.8)"
+        ]
+      },
+      "on-accent": {
+        "role": "neutral",
+        "displayName": "On Accent",
+        "canonical": "#ffffff",
+        "tonalRamp": [
+          "oklch(15% 0.000 89.9)",
+          "oklch(26% 0.000 89.9)",
+          "oklch(38% 0.000 89.9)",
+          "oklch(50% 0.000 89.9)",
+          "oklch(62% 0.000 89.9)",
+          "oklch(73% 0.000 89.9)",
+          "oklch(84% 0.000 89.9)",
+          "oklch(95% 0.000 89.9)"
+        ]
+      },
+      "accent": {
+        "role": "primary",
+        "displayName": "Signal Crimson",
+        "canonical": "#dc244c",
+        "tonalRamp": [
+          "oklch(15% 0.214 16.4)",
+          "oklch(26% 0.214 16.4)",
+          "oklch(38% 0.214 16.4)",
+          "oklch(50% 0.214 16.4)",
+          "oklch(62% 0.214 16.4)",
+          "oklch(73% 0.214 16.4)",
+          "oklch(84% 0.214 16.4)",
+          "oklch(95% 0.214 16.4)"
+        ]
+      },
+      "accent-hover": {
+        "role": "primary",
+        "displayName": "Crimson Hover",
+        "canonical": "#e83a60",
+        "tonalRamp": [
+          "oklch(15% 0.209 13.7)",
+          "oklch(26% 0.209 13.7)",
+          "oklch(38% 0.209 13.7)",
+          "oklch(50% 0.209 13.7)",
+          "oklch(62% 0.209 13.7)",
+          "oklch(73% 0.209 13.7)",
+          "oklch(84% 0.209 13.7)",
+          "oklch(95% 0.209 13.7)"
+        ]
+      },
+      "accent-ink": {
+        "role": "primary",
+        "displayName": "Crimson Ink",
+        "canonical": "#ff6b8a",
+        "tonalRamp": [
+          "oklch(15% 0.181 10.0)",
+          "oklch(26% 0.181 10.0)",
+          "oklch(38% 0.181 10.0)",
+          "oklch(50% 0.181 10.0)",
+          "oklch(62% 0.181 10.0)",
+          "oklch(73% 0.181 10.0)",
+          "oklch(84% 0.181 10.0)",
+          "oklch(95% 0.181 10.0)"
+        ]
+      },
+      "accent-soft": {
+        "role": "primary",
+        "displayName": "Crimson Wash",
+        "canonical": "rgba(220, 36, 76, 0.12)",
+        "tonalRamp": [
+          "oklch(15% 0.214 16.4)",
+          "oklch(26% 0.214 16.4)",
+          "oklch(38% 0.214 16.4)",
+          "oklch(50% 0.214 16.4)",
+          "oklch(62% 0.214 16.4)",
+          "oklch(73% 0.214 16.4)",
+          "oklch(84% 0.214 16.4)",
+          "oklch(95% 0.214 16.4)"
+        ]
+      },
+      "accent-line": {
+        "role": "primary",
+        "displayName": "Crimson Edge",
+        "canonical": "rgba(220, 36, 76, 0.45)",
+        "tonalRamp": [
+          "oklch(15% 0.214 16.4)",
+          "oklch(26% 0.214 16.4)",
+          "oklch(38% 0.214 16.4)",
+          "oklch(50% 0.214 16.4)",
+          "oklch(62% 0.214 16.4)",
+          "oklch(73% 0.214 16.4)",
+          "oklch(84% 0.214 16.4)",
+          "oklch(95% 0.214 16.4)"
+        ]
+      },
+      "ok": {
+        "role": "secondary",
+        "displayName": "Healthy Green",
+        "canonical": "#3fb37f",
+        "tonalRamp": [
+          "oklch(15% 0.130 160.3)",
+          "oklch(26% 0.130 160.3)",
+          "oklch(38% 0.130 160.3)",
+          "oklch(50% 0.130 160.3)",
+          "oklch(62% 0.130 160.3)",
+          "oklch(73% 0.130 160.3)",
+          "oklch(84% 0.130 160.3)",
+          "oklch(95% 0.130 160.3)"
+        ]
+      },
+      "ok-soft": {
+        "role": "secondary",
+        "displayName": "Healthy Wash",
+        "canonical": "rgba(63, 179, 127, 0.12)",
+        "tonalRamp": [
+          "oklch(15% 0.130 160.3)",
+          "oklch(26% 0.130 160.3)",
+          "oklch(38% 0.130 160.3)",
+          "oklch(50% 0.130 160.3)",
+          "oklch(62% 0.130 160.3)",
+          "oklch(73% 0.130 160.3)",
+          "oklch(84% 0.130 160.3)",
+          "oklch(95% 0.130 160.3)"
+        ]
+      },
+      "warn": {
+        "role": "secondary",
+        "displayName": "Attention Amber",
+        "canonical": "#e2a33b",
+        "tonalRamp": [
+          "oklch(15% 0.138 75.9)",
+          "oklch(26% 0.138 75.9)",
+          "oklch(38% 0.138 75.9)",
+          "oklch(50% 0.138 75.9)",
+          "oklch(62% 0.138 75.9)",
+          "oklch(73% 0.138 75.9)",
+          "oklch(84% 0.138 75.9)",
+          "oklch(95% 0.138 75.9)"
+        ]
+      },
+      "warn-soft": {
+        "role": "secondary",
+        "displayName": "Attention Wash",
+        "canonical": "rgba(226, 163, 59, 0.11)",
+        "tonalRamp": [
+          "oklch(15% 0.138 75.9)",
+          "oklch(26% 0.138 75.9)",
+          "oklch(38% 0.138 75.9)",
+          "oklch(50% 0.138 75.9)",
+          "oklch(62% 0.138 75.9)",
+          "oklch(73% 0.138 75.9)",
+          "oklch(84% 0.138 75.9)",
+          "oklch(95% 0.138 75.9)"
+        ]
+      },
+      "bad": {
+        "role": "secondary",
+        "displayName": "Failure Red",
+        "canonical": "#f0616d",
+        "tonalRamp": [
+          "oklch(15% 0.176 18.1)",
+          "oklch(26% 0.176 18.1)",
+          "oklch(38% 0.176 18.1)",
+          "oklch(50% 0.176 18.1)",
+          "oklch(62% 0.176 18.1)",
+          "oklch(73% 0.176 18.1)",
+          "oklch(84% 0.176 18.1)",
+          "oklch(95% 0.176 18.1)"
+        ]
+      },
+      "bad-soft": {
+        "role": "secondary",
+        "displayName": "Failure Wash",
+        "canonical": "rgba(240, 97, 109, 0.12)",
+        "tonalRamp": [
+          "oklch(15% 0.176 18.1)",
+          "oklch(26% 0.176 18.1)",
+          "oklch(38% 0.176 18.1)",
+          "oklch(50% 0.176 18.1)",
+          "oklch(62% 0.176 18.1)",
+          "oklch(73% 0.176 18.1)",
+          "oklch(84% 0.176 18.1)",
+          "oklch(95% 0.176 18.1)"
+        ]
+      },
+      "danger-solid": {
+        "role": "secondary",
+        "displayName": "Committed Red",
+        "canonical": "#b5303c",
+        "tonalRamp": [
+          "oklch(15% 0.169 20.7)",
+          "oklch(26% 0.169 20.7)",
+          "oklch(38% 0.169 20.7)",
+          "oklch(50% 0.169 20.7)",
+          "oklch(62% 0.169 20.7)",
+          "oklch(73% 0.169 20.7)",
+          "oklch(84% 0.169 20.7)",
+          "oklch(95% 0.169 20.7)"
+        ]
+      },
+      "danger-solid-hover": {
+        "role": "secondary",
+        "displayName": "Committed Red Hover",
+        "canonical": "#c93a47",
+        "tonalRamp": [
+          "oklch(15% 0.179 20.2)",
+          "oklch(26% 0.179 20.2)",
+          "oklch(38% 0.179 20.2)",
+          "oklch(50% 0.179 20.2)",
+          "oklch(62% 0.179 20.2)",
+          "oklch(73% 0.179 20.2)",
+          "oklch(84% 0.179 20.2)",
+          "oklch(95% 0.179 20.2)"
+        ]
+      },
+      "track": {
+        "role": "tertiary",
+        "displayName": "Meter Track",
+        "canonical": "#1f2431",
+        "tonalRamp": [
+          "oklch(15% 0.026 268.3)",
+          "oklch(26% 0.026 268.3)",
+          "oklch(38% 0.026 268.3)",
+          "oklch(50% 0.026 268.3)",
+          "oklch(62% 0.026 268.3)",
+          "oklch(73% 0.026 268.3)",
+          "oklch(84% 0.026 268.3)",
+          "oklch(95% 0.026 268.3)"
+        ]
+      },
+      "meter": {
+        "role": "tertiary",
+        "displayName": "Meter Fill",
+        "canonical": "#7b8496",
+        "tonalRamp": [
+          "oklch(15% 0.029 264.3)",
+          "oklch(26% 0.029 264.3)",
+          "oklch(38% 0.029 264.3)",
+          "oklch(50% 0.029 264.3)",
+          "oklch(62% 0.029 264.3)",
+          "oklch(73% 0.029 264.3)",
+          "oklch(84% 0.029 264.3)",
+          "oklch(95% 0.029 264.3)"
+        ]
+      },
+      "series-strong": {
+        "role": "tertiary",
+        "displayName": "Slate Series Strong",
+        "canonical": "#8fa3c7",
+        "tonalRamp": [
+          "oklch(15% 0.057 262.1)",
+          "oklch(26% 0.057 262.1)",
+          "oklch(38% 0.057 262.1)",
+          "oklch(50% 0.057 262.1)",
+          "oklch(62% 0.057 262.1)",
+          "oklch(73% 0.057 262.1)",
+          "oklch(84% 0.057 262.1)",
+          "oklch(95% 0.057 262.1)"
+        ]
+      },
+      "series-soft": {
+        "role": "tertiary",
+        "displayName": "Slate Series Soft",
+        "canonical": "#5d6e8c",
+        "tonalRamp": [
+          "oklch(15% 0.052 261.7)",
+          "oklch(26% 0.052 261.7)",
+          "oklch(38% 0.052 261.7)",
+          "oklch(50% 0.052 261.7)",
+          "oklch(62% 0.052 261.7)",
+          "oklch(73% 0.052 261.7)",
+          "oklch(84% 0.052 261.7)",
+          "oklch(95% 0.052 261.7)"
+        ]
+      },
+      "json-key": {
+        "role": "tertiary",
+        "displayName": "JSON Key Blue",
+        "canonical": "#9cb4e0",
+        "tonalRamp": [
+          "oklch(15% 0.069 262.4)",
+          "oklch(26% 0.069 262.4)",
+          "oklch(38% 0.069 262.4)",
+          "oklch(50% 0.069 262.4)",
+          "oklch(62% 0.069 262.4)",
+          "oklch(73% 0.069 262.4)",
+          "oklch(84% 0.069 262.4)",
+          "oklch(95% 0.069 262.4)"
+        ]
+      },
+      "json-string": {
+        "role": "tertiary",
+        "displayName": "JSON String Sage",
+        "canonical": "#a6d18f",
+        "tonalRamp": [
+          "oklch(15% 0.100 135.1)",
+          "oklch(26% 0.100 135.1)",
+          "oklch(38% 0.100 135.1)",
+          "oklch(50% 0.100 135.1)",
+          "oklch(62% 0.100 135.1)",
+          "oklch(73% 0.100 135.1)",
+          "oklch(84% 0.100 135.1)",
+          "oklch(95% 0.100 135.1)"
+        ]
+      },
+      "json-number": {
+        "role": "tertiary",
+        "displayName": "JSON Number Sand",
+        "canonical": "#e0b47a",
+        "tonalRamp": [
+          "oklch(15% 0.091 73.6)",
+          "oklch(26% 0.091 73.6)",
+          "oklch(38% 0.091 73.6)",
+          "oklch(50% 0.091 73.6)",
+          "oklch(62% 0.091 73.6)",
+          "oklch(73% 0.091 73.6)",
+          "oklch(84% 0.091 73.6)",
+          "oklch(95% 0.091 73.6)"
+        ]
+      },
+      "json-literal": {
+        "role": "tertiary",
+        "displayName": "JSON Literal Rose",
+        "canonical": "#e58aa6",
+        "tonalRamp": [
+          "oklch(15% 0.115 0.5)",
+          "oklch(26% 0.115 0.5)",
+          "oklch(38% 0.115 0.5)",
+          "oklch(50% 0.115 0.5)",
+          "oklch(62% 0.115 0.5)",
+          "oklch(73% 0.115 0.5)",
+          "oklch(84% 0.115 0.5)",
+          "oklch(95% 0.115 0.5)"
+        ]
+      },
+      "json-punct": {
+        "role": "tertiary",
+        "displayName": "JSON Punctuation",
+        "canonical": "#5d6577",
+        "tonalRamp": [
+          "oklch(15% 0.030 266.4)",
+          "oklch(26% 0.030 266.4)",
+          "oklch(38% 0.030 266.4)",
+          "oklch(50% 0.030 266.4)",
+          "oklch(62% 0.030 266.4)",
+          "oklch(73% 0.030 266.4)",
+          "oklch(84% 0.030 266.4)",
+          "oklch(95% 0.030 266.4)"
+        ]
+      },
+      "json-gutter": {
+        "role": "tertiary",
+        "displayName": "JSON Gutter",
+        "canonical": "#3c4354",
+        "tonalRamp": [
+          "oklch(15% 0.031 267.4)",
+          "oklch(26% 0.031 267.4)",
+          "oklch(38% 0.031 267.4)",
+          "oklch(50% 0.031 267.4)",
+          "oklch(62% 0.031 267.4)",
+          "oklch(73% 0.031 267.4)",
+          "oklch(84% 0.031 267.4)",
+          "oklch(95% 0.031 267.4)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "metric": {
+        "displayName": "Metric",
+        "purpose": "The single headline figure of a panel, such as recall."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "The page or collection name in the page head, one per view."
+      },
+      "stat": {
+        "displayName": "Stat",
+        "purpose": "Secondary figures in panels, dialog titles and the wordmark (at 600)."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Panel headings."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Table cells, buttons, nav and prose."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Table headers, field labels and sidebar section heads, sentence case."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "Ids, field keys, dims, segment names and other machine values."
+      },
+      "code": {
+        "displayName": "Code",
+        "purpose": "The JSON pane and payload textareas."
+      },
+      "mono-small": {
+        "displayName": "Mono Small",
+        "purpose": "Tags, kbd hints, versions and tab counts, the smallest size in the ramp."
+      }
+    },
+    "shadows": [
+      {
+        "name": "menu",
+        "value": "0 12px 32px rgba(0, 0, 0, 0.45)",
+        "purpose": "Dropdown menus anchored to a button."
+      },
+      {
+        "name": "dialog",
+        "value": "0 12px 28px rgba(0, 0, 0, 0.45)",
+        "purpose": "The confirm dialog, over a rgba(5, 6, 9, 0.66) backdrop."
+      },
+      {
+        "name": "toast",
+        "value": "0 8px 24px rgba(0, 0, 0, 0.4)",
+        "purpose": "Bottom-right notices."
+      },
+      {
+        "name": "drawer",
+        "value": "12px 0 32px rgba(0, 0, 0, 0.45)",
+        "purpose": "The open sidebar drawer under 900px, over a rgba(5, 6, 9, 0.6) scrim."
+      },
+      {
+        "name": "focus-halo",
+        "value": "0 0 0 3px rgba(220, 36, 76, 0.12)",
+        "purpose": "Focus ring on inputs, textareas, selects and the top search, with an accent-line border."
+      },
+      {
+        "name": "selection-marker",
+        "value": "inset 2px 0 0 #dc244c",
+        "purpose": "First cell of a selected row in the points and query tables."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-out",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "The one easing for overlays: drawer and dialog."
+      },
+      {
+        "name": "state",
+        "value": "120ms",
+        "purpose": "Colour, border and halo transitions on buttons and fields."
+      },
+      {
+        "name": "drawer",
+        "value": "transform 220ms ease-out",
+        "purpose": "Sidebar drawer slide under 900px."
+      },
+      {
+        "name": "dialog-rise",
+        "value": "200ms ease-out, from opacity 0 and translateY(6px)",
+        "purpose": "Confirm dialog entrance."
+      },
+      {
+        "name": "toast-fly",
+        "value": "180ms, from y 8px",
+        "purpose": "Toast entrance."
+      },
+      {
+        "name": "skeleton-pulse",
+        "value": "1.6s ease-in-out infinite, opacity to 0.45",
+        "purpose": "Loading placeholders, off under reduced motion."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "0.01ms",
+        "purpose": "All transitions and animations under prefers-reduced-motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "overview-stack",
+        "value": "1240px"
+      },
+      {
+        "name": "points-pane-stack",
+        "value": "1100px"
+      },
+      {
+        "name": "query-telemetry-stack",
+        "value": "1000px"
+      },
+      {
+        "name": "drawer",
+        "value": "900px"
+      },
+      {
+        "name": "page-compact",
+        "value": "760px"
+      },
+      {
+        "name": "overview-pairs-stack",
+        "value": "700px"
+      },
+      {
+        "name": "topbar-compact",
+        "value": "560px"
+      },
+      {
+        "name": "container-config-two-col",
+        "value": "@container 639px"
+      },
+      {
+        "name": "container-config-one-col",
+        "value": "@container 380px"
+      },
+      {
+        "name": "container-segments-trim",
+        "value": "@container 640px"
+      },
+      {
+        "name": "container-segments-min",
+        "value": "@container 520px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one primary action in a page head, such as Create snapshot.",
+      "html": "<button class=\"ds-btn ds-btn-primary\"><svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M2 4.5h10v7H2z\"/><path d=\"M4.5 4.5l1-2h3l1 2\"/><circle cx=\"7\" cy=\"8\" r=\"1.6\"/></svg>Create snapshot</button>",
+      "css": ".ds-btn{height:30px;padding:0 12px;border-radius:var(--r,6px);display:inline-flex;align-items:center;gap:7px;background:var(--raised,#141821);border:1px solid var(--line-2,#262c39);color:var(--text,#e5e7eb);font:500 13px/1 var(--sans,'Geist Variable',system-ui,sans-serif);cursor:pointer;transition:background-color 120ms,border-color 120ms,color 120ms}.ds-btn-primary{background:var(--accent,#dc244c);border-color:var(--accent,#dc244c);color:#fff}.ds-btn-primary svg{color:rgba(255,255,255,.85)}.ds-btn-primary:hover{background:var(--accent-hover,#e83a60);border-color:var(--accent-hover,#e83a60)}.ds-btn:focus-visible{outline:2px solid var(--accent,#dc244c);outline-offset:2px}"
+    },
+    {
+      "name": "Default Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "Secondary actions such as Re-run, on the raised fill with a hairline border.",
+      "html": "<button class=\"ds-btn-default\"><svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 2.8v8.4L11 7z\"/></svg>Re-run</button>",
+      "css": ".ds-btn-default{height:30px;padding:0 12px;border-radius:var(--r,6px);display:inline-flex;align-items:center;gap:7px;background:var(--raised,#141821);border:1px solid var(--line-2,#262c39);color:var(--text,#e5e7eb);font:500 13px/1 var(--sans,'Geist Variable',system-ui,sans-serif);cursor:pointer;transition:background-color 120ms,border-color 120ms}.ds-btn-default svg{color:var(--text-3,#7a8191)}.ds-btn-default:hover{background:#1a1f2a;border-color:var(--line-3,#323a4b)}.ds-btn-default:focus-visible{outline:2px solid var(--accent,#dc244c);outline-offset:2px}"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Low-weight actions such as Cancel in a dialog.",
+      "html": "<button class=\"ds-btn-ghost\">Cancel</button>",
+      "css": ".ds-btn-ghost{height:30px;padding:0 12px;border-radius:var(--r,6px);background:none;border:1px solid transparent;color:var(--text-2,#a3a9b5);font:500 13px/1 var(--sans,'Geist Variable',system-ui,sans-serif);cursor:pointer;transition:background-color 120ms,color 120ms}.ds-btn-ghost:hover{background:var(--hover,#171c26);color:var(--text,#e5e7eb)}.ds-btn-ghost:focus-visible{outline:2px solid var(--accent,#dc244c);outline-offset:2px}"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "A 30px ground well with a crimson-edge focus halo.",
+      "html": "<input class=\"ds-input\" placeholder=\"Search collections, ids, field:value\">",
+      "css": ".ds-input{width:280px;height:30px;padding:0 10px;background:var(--ground,#0b0d12);border:1px solid var(--line-2,#262c39);border-radius:var(--r,6px);color:var(--text,#e5e7eb);caret-color:var(--accent-ink,#ff6b8a);font:400 13px var(--sans,'Geist Variable',system-ui,sans-serif);transition:border-color 120ms,box-shadow 120ms}.ds-input::placeholder{color:var(--text-3,#7a8191)}.ds-input:hover{border-color:var(--line-3,#323a4b)}.ds-input:focus-visible{outline:none;border-color:var(--accent-line,rgba(220,36,76,.45));box-shadow:0 0 0 3px var(--accent-soft,rgba(220,36,76,.12))}"
+    },
+    {
+      "name": "Status Pills and Flag",
+      "kind": "chip",
+      "refersTo": "pill-ok",
+      "description": "Engine signals: a rounded pill for status and a squarer flag for inline attention.",
+      "html": "<span class=\"ds-pill ds-ok\"><i></i>ok</span> <span class=\"ds-pill ds-warn\"><i></i>optimizing</span> <span class=\"ds-pill ds-bad\"><i></i>failed</span> <span class=\"ds-flag\">over vacuum threshold</span>",
+      "css": ".ds-pill{display:inline-flex;align-items:center;gap:6px;height:20px;padding:0 8px;border-radius:10px;font:500 12px var(--sans,'Geist Variable',system-ui,sans-serif)}.ds-pill i{width:5px;height:5px;border-radius:50%;background:currentColor}.ds-ok{color:var(--ok,#3fb37f);background:var(--ok-soft,rgba(63,179,127,.12))}.ds-warn{color:var(--warn,#e2a33b);background:var(--warn-soft,rgba(226,163,59,.11))}.ds-bad{color:var(--bad,#f0616d);background:var(--bad-soft,rgba(240,97,109,.12))}.ds-flag{display:inline-flex;align-items:center;min-height:20px;padding:0 7px;border-radius:4px;font:400 12px var(--sans,'Geist Variable',system-ui,sans-serif);color:var(--warn,#e2a33b);background:var(--warn-soft,rgba(226,163,59,.11))}"
+    },
+    {
+      "name": "Segmented Control",
+      "kind": "custom",
+      "refersTo": "segmented",
+      "description": "Small view switch, such as Payload and Vector on the point pane.",
+      "html": "<div class=\"ds-seg\"><button aria-pressed=\"true\">Payload</button><button aria-pressed=\"false\">Vector</button></div>",
+      "css": ".ds-seg{display:inline-flex;border:1px solid var(--line-2,#262c39);border-radius:4px;padding:1px;background:var(--ground,#0b0d12)}.ds-seg button{height:20px;padding:0 8px;border:0;border-radius:3px;background:none;color:var(--text-3,#7a8191);font:400 12px var(--sans,'Geist Variable',system-ui,sans-serif);cursor:pointer}.ds-seg button:hover{color:var(--text,#e5e7eb)}.ds-seg button[aria-pressed=true]{background:var(--raised,#141821);color:var(--text,#e5e7eb)}.ds-seg button:focus-visible{outline:2px solid var(--accent,#dc244c);outline-offset:2px}"
+    },
+    {
+      "name": "Sidebar Navigation",
+      "kind": "nav",
+      "refersTo": "nav-item-current",
+      "description": "Collection rows with a status dot and count, the current row marked by a 2px crimson edge.",
+      "html": "<ul class=\"ds-nav\"><li><a href=\"#\"><span><i></i>bookmarks</span><b>2.9k</b></a></li><li><a href=\"#\" aria-current=\"page\"><span><i></i>notes</span><b>25.5k</b></a></li><li><a href=\"#\"><span><i></i>faces</span><b>1.2k</b></a></li></ul>",
+      "css": ".ds-nav{list-style:none;margin:0;padding:8px;width:216px;background:var(--surface,#0f1218);font:400 13px var(--sans,'Geist Variable',system-ui,sans-serif)}.ds-nav a{position:relative;display:flex;justify-content:space-between;align-items:center;height:30px;padding:0 8px 0 10px;border-radius:4px;color:var(--text-2,#a3a9b5);text-decoration:none}.ds-nav span{display:flex;align-items:center;gap:8px}.ds-nav i{width:6px;height:6px;border-radius:50%;background:var(--ok,#3fb37f)}.ds-nav b{font-weight:400;font-size:12px;color:var(--text-3,#7a8191);font-variant-numeric:tabular-nums}.ds-nav a:hover{background:var(--hover,#171c26);color:var(--text,#e5e7eb)}.ds-nav a[aria-current=page]{background:var(--raised,#141821);color:var(--text,#e5e7eb)}.ds-nav a[aria-current=page]::before{content:'';position:absolute;left:-8px;top:7px;bottom:7px;width:2px;background:var(--accent,#dc244c);border-radius:0 2px 2px 0}.ds-nav a:focus-visible{outline:2px solid var(--accent,#dc244c);outline-offset:2px}"
+    },
+    {
+      "name": "Panel with Table",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "The hairline panel anatomy: 42px header with title and aside, then a dense table.",
+      "html": "<section class=\"ds-panel\"><header><h2>Segments</h2><span>1</span></header><table><thead><tr><th>Segment</th><th class=\"r\">Points</th><th>State</th></tr></thead><tbody><tr><td class=\"m\">seg 1</td><td class=\"r\">21,575</td><td><span class=\"ok\"></span>Ready</td></tr><tr><td class=\"m\">memtable</td><td class=\"r\">4,425</td><td>20% to flush</td></tr></tbody></table></section>",
+      "css": ".ds-panel{width:420px;background:var(--surface,#0f1218);border:1px solid var(--line,#1c212c);border-radius:8px;color:var(--text,#e5e7eb);font:400 13px/1.45 var(--sans,'Geist Variable',system-ui,sans-serif)}.ds-panel header{min-height:42px;display:flex;align-items:center;gap:10px;padding:0 14px 0 16px;border-bottom:1px solid var(--line,#1c212c)}.ds-panel h2{margin:0;font-size:13px;font-weight:600;letter-spacing:-.005em}.ds-panel header span{color:var(--text-3,#7a8191)}.ds-panel table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}.ds-panel th{height:32px;padding:0 12px;text-align:left;font-weight:500;font-size:12px;color:var(--text-3,#7a8191);border-bottom:1px solid var(--line,#1c212c)}.ds-panel td{height:40px;padding:0 12px;border-bottom:1px solid var(--line,#1c212c)}.ds-panel tr:last-child td{border-bottom:0}.ds-panel th:first-child,.ds-panel td:first-child{padding-left:16px}.ds-panel .r{text-align:right}.ds-panel .m{font-family:var(--mono,'Geist Mono Variable',ui-monospace,monospace);font-size:12px}.ds-panel .ok{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok,#3fb37f);margin-right:7px}.ds-panel tbody tr:hover td{background:var(--hover,#171c26)}"
+    },
+    {
+      "name": "Points Table with JSON Pane",
+      "kind": "custom",
+      "refersTo": "points-row-selected",
+      "description": "Signature: 28px point rows with a crimson selection marker, synced to a syntax-coloured JSON pane.",
+      "html": "<div class=\"ds-pts\"><table><tbody><tr><td class=\"id\">40001</td><td>Mmap commit index</td></tr><tr aria-selected=\"true\"><td class=\"id\">40002</td><td>Fsync merge snapshot</td></tr><tr><td class=\"id\">40005</td><td>Tombstone recall payload</td></tr></tbody></table><pre class=\"ds-json\"><span class=\"p\">{</span>\n  <span class=\"k\">\"title\"</span><span class=\"p\">:</span> <span class=\"s\">\"Fsync merge snapshot\"</span><span class=\"p\">,</span>\n  <span class=\"k\">\"pinned\"</span><span class=\"p\">:</span> <span class=\"b\">false</span><span class=\"p\">,</span>\n  <span class=\"k\">\"rank\"</span><span class=\"p\">:</span> <span class=\"n\">0.982</span>\n<span class=\"p\">}</span></pre></div>",
+      "css": ".ds-pts{width:420px;background:var(--surface,#0f1218);border:1px solid var(--line,#1c212c);border-radius:8px;overflow:hidden;font:400 13px var(--sans,'Geist Variable',system-ui,sans-serif);color:var(--text,#e5e7eb)}.ds-pts table{width:100%;border-collapse:collapse}.ds-pts td{height:28px;padding:0 12px;border-bottom:1px solid var(--line,#1c212c)}.ds-pts td:first-child{padding-left:16px}.ds-pts .id{width:72px;font-family:var(--mono,'Geist Mono Variable',ui-monospace,monospace);font-size:12px;color:var(--text-2,#a3a9b5);font-variant-numeric:tabular-nums}.ds-pts tr:hover td{background:var(--hover,#171c26)}.ds-pts tr[aria-selected=true] td{background:var(--accent-soft,rgba(220,36,76,.12))}.ds-pts tr[aria-selected=true] td:first-child{box-shadow:inset 2px 0 0 var(--accent,#dc244c);color:var(--text,#e5e7eb)}.ds-json{margin:0;padding:9px 16px;font:400 12.5px/20px var(--mono,'Geist Mono Variable',ui-monospace,monospace);color:var(--text-2,#a3a9b5)}.ds-json .k{color:#9cb4e0}.ds-json .s{color:#a6d18f}.ds-json .n{color:#e0b47a}.ds-json .b{color:#e58aa6}.ds-json .p{color:#5d6577}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Instrument Panel",
+    "overview": "The console is the category standard played straight, a dark admin frame in the familiar shape of vector database dashboards with a sidebar of collections, a top bar with search and node health, and a main column of hairline panels, and it earns its place through finish and density. Everything is tuned so the operator can read engine state at a glance: tones step up from a near-black ground in small lifts, numbers sit in tabular columns, and the only saturated colours on screen are a single crimson for the thing you chose or the thing you should press, and the three engine signals for healthy, attention and failure.\n\nDensity is high and deliberate, with 13px body type, 28px point rows and a full collection overview that fits 1440 by 900 without scrolling. Machine values (ids, field keys, dimensions, versions, segment names, JSON) are set in Geist Mono, and human labels stay in Geist, so the two kinds of text never blur. There are no gradients, no glass and no glow anywhere, depth comes from hairline borders on lifted tones, and the only shadows belong to things that float above the frame.",
+    "keyCharacteristics": [
+      "Near-black ground with panels lifted one small step, separated by 1px hairlines.",
+      "One crimson accent, spent on the primary action and on selection or current state.",
+      "Green, amber and red reserved for engine health, always paired with a word or a dot.",
+      "Geist for interface text, Geist Mono for machine values, tabular figures on every number.",
+      "Compact, information-dense tables with a synced JSON pane as the signature interaction."
+    ],
+    "rules": [
+      {
+        "name": "The One Accent Rule",
+        "body": "Crimson marks only the primary action and what is selected, current or focused, and it never decorates, never draws a data series and never signals status.",
+        "section": "colors"
+      },
+      {
+        "name": "The Engine Signal Rule",
+        "body": "Green means healthy, amber means attention and red means failure, each always carried by a word, a dot or an icon alongside the colour, on a soft 11 to 12% wash of the same hue.",
+        "section": "colors"
+      },
+      {
+        "name": "The Slate Data Rule",
+        "body": "Charts and meters draw in the slate family, and a status hue enters a meter only when the measured value itself is the warning.",
+        "section": "colors"
+      },
+      {
+        "name": "The Tabular Figures Rule",
+        "body": "Tabular figures are set on the body, so every number that can change or be compared lines up in its column and counters and meters never jitter.",
+        "section": "typography"
+      },
+      {
+        "name": "The Machine Voice Rule",
+        "body": "If the engine wrote it (an id, a key, a dtype, a path, a version) it is set in Geist Mono, and if a person reads it as a label it is set in Geist.",
+        "section": "typography"
+      },
+      {
+        "name": "The Sentence Case Rule",
+        "body": "Labels and section heads are quiet 12px sentence case, and the system has no uppercase tracked labels.",
+        "section": "typography"
+      },
+      {
+        "name": "The Floating-Only Shadow Rule",
+        "body": "A shadow means the layer floats above the frame and can be dismissed, so panels, cards and buttons never get one.",
+        "section": "elevation"
+      },
+      {
+        "name": "The No Atmosphere Rule",
+        "body": "No gradients, no glass or backdrop blur and no glow, and focus is the only state that draws a ring.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** keep crimson to the primary action plus selected, current and focused states, one primary button per page head.",
+      "**Do** put every status colour next to a word, a dot or an icon, on its own soft wash.",
+      "**Do** set ids, keys, dtypes, versions and JSON in Geist Mono and give every number tabular figures.",
+      "**Do** build depth from the ground, surface, raised and hover steps with 1px hairlines, and keep panels at 8px corners with a 42px header.",
+      "**Do** let panels adapt to their own width with container queries, and collapse the page grid at the shared breakpoints.",
+      "**Do** use the 2px crimson edge marker for any new selectable list, matching the points table and sidebar."
+    ],
+    "donts": [
+      "**Don't** use gradients, glass or backdrop blur, or glow on any surface.",
+      "**Don't** put shadows on panels, buttons or anything that sits in the page; shadows belong to menus, dialogs, toasts and the drawer.",
+      "**Don't** use crimson for data series, decoration or status, and don't use green, amber or red for anything other than health, attention and failure.",
+      "**Don't** add uppercase tracked labels or set text below 11px.",
+      "**Don't** introduce a second accent hue or a light theme without a design decision recorded first."
+    ]
+  }
+}

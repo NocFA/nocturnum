@@ -281,7 +281,7 @@ fn escape(label: &str) -> String {
 /// The route a request matched, copied into the response so [`track`], which runs before
 /// routing, can label it.
 #[derive(Clone)]
-struct Route(String);
+pub(crate) struct Route(pub(crate) String);
 
 /// Route-level middleware that passes the matched route out to [`track`].
 pub(crate) async fn tag(req: Request, next: Next) -> Response {

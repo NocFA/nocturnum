@@ -31,20 +31,23 @@ The engine and the REST server run end to end, with 249 tests passing on macOS a
 | Security | admin and read-only keys, loopback by default, protection against DNS rebinding and cross-site requests when no keys are set |
 | Operations | `/livez`, `/readyz`, Prometheus `/metrics`, per-collection engine status, a recall check against exact search, clean shutdown on SIGINT or SIGTERM |
 | Backups | snapshots with checksums, download and restore, crash-safe swaps, and cron schedules with keep-last-N per collection |
+| Web console | built into the binary on the same port: collections, engine state per segment, a points browser with a JSON pane and keyboard navigation, a query console, an ef sweep against exact search, snapshots and schedules, telemetry and keys |
 
-The web console, gRPC and quantization are next, see [Roadmap](#roadmap).
+gRPC and quantization are next, see [Roadmap](#roadmap).
 
 ## Quick start
 
-You need Rust, with the toolchain pinned in `rust-toolchain.toml` installed by `rustup` on first build.
+You need Rust, with the toolchain pinned in `rust-toolchain.toml` installed by `rustup` on first build, and Node 22.17 or newer to build the web console.
 
 ```bash
 git clone https://git.nocfa.net/NocFA/nocturnum.git
 cd nocturnum
+npm --prefix console ci && npm --prefix console run build
 cargo run --release -p nocturnum-server -- --data ./data
 ```
 
-The server listens on `http://127.0.0.1:6333` and keeps everything under `./data`.
+The server listens on `http://127.0.0.1:6333` and keeps everything under `./data`, and the web console is at that same address in a browser.
+A binary built without the console still serves the whole API, and says at startup that the console is missing.
 
 ```bash
 curl -s localhost:6333/readyz; echo
@@ -344,17 +347,20 @@ cargo clippy --workspace --all-targets
 cargo run -p nocturnum-server             # a debug server on 6333
 ```
 
+The console lives in `console/`, a SvelteKit app built to static files that the binary embeds, see [`console/README.md`](console/README.md).
+A debug server reads `console/build` from disk as it is asked for, so a fresh `npm run build` shows up without restarting, while a release build carries the files inside the binary.
+
 The crash tests run the test binary again as a child process and kill it, and `NOCTURNUM_CRASH_SEED=<seed>` replays a run they print.
 
 Qdrant's Apache-2.0 source was read to understand how it works, and nocturnum's code is written from scratch, never copied or translated from it.
 
 ## Roadmap
 
-1. The web console, built into the binary and served on the same port.
-2. gRPC on port 6334, over the same operations as REST.
-3. Scalar quantization, sparse vectors with BM25, optional TLS and OpenAPI docs.
-4. Snapshots sent to S3-compatible storage.
-5. Benchmarks and power-loss tests on real hardware.
+1. gRPC on port 6334, over the same operations as REST.
+2. Scalar quantization, sparse vectors with BM25, optional TLS and OpenAPI docs.
+3. Snapshots sent to S3-compatible storage.
+4. Benchmarks and power-loss tests on real hardware.
+5. Cluster and log views in the console, once the engine has clustering and a log endpoint.
 
 Clustering is out of v1, though shard ids are in the on-disk format already so it can come later without a migration.
 

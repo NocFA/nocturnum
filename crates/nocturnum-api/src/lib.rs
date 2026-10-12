@@ -23,11 +23,48 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Instant, SystemTime};
 
 use axum::Router;
-use axum::extract::DefaultBodyLimit;
+use axum::extract::{DefaultBodyLimit, Request};
+use axum::http::{HeaderMap, Method, Uri};
+use axum::response::{IntoResponse, Response};
 
 pub use error::ApiError;
 pub use registry::{Registry, RegistryOptions};
 pub use schedule::{Schedule, ScheduleState, Scheduler};
+
+/// Answers requests for paths outside the API, which the binary uses to serve its web console.
+/// It runs without a key, so it must only hand out files that hold nothing private.
+pub type Console = Arc<dyn Fn(&Method, &Uri, &HeaderMap) -> Response + Send + Sync>;
+
+/// Whether a path belongs to the API, whose unknown paths get a JSON 404 rather than the
+/// console. Percent escapes are decoded first and case is ignored, so `/%76%31/...` and
+/// `/v1%2F...` stay with the API too.
+fn api_path(path: &str) -> bool {
+    let path = decode(path).to_ascii_lowercase();
+    path == "/v1"
+        || path.starts_with("/v1/")
+        || matches!(path.as_str(), "/metrics" | "/livez" | "/readyz")
+}
+
+/// `%XX` escapes decoded, leaving malformed ones as they are.
+fn decode(path: &str) -> String {
+    let bytes = path.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16);
+        if bytes[i] == b'%'
+            && let (Some(&a), Some(&b)) = (bytes.get(i + 1), bytes.get(i + 2))
+            && let (Some(a), Some(b)) = (hex(a), hex(b))
+        {
+            out.push((a * 16 + b) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
 
 /// The default request body limit, 32 MiB.
 pub const DEFAULT_MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
@@ -102,6 +139,23 @@ impl Api {
     }
 
     pub fn router(self: &Arc<Self>) -> Router {
+        self.router_with_console(None)
+    }
+
+    /// The API, with `console` answering every request outside it.
+    pub fn router_with_console(self: &Arc<Self>, console: Option<Console>) -> Router {
+        let fallback = move |req: Request| async move {
+            match &console {
+                Some(serve) if !api_path(req.uri().path()) => {
+                    let mut response = serve(req.method(), req.uri(), req.headers());
+                    response
+                        .extensions_mut()
+                        .insert(metrics::Route("console".to_owned()));
+                    response
+                }
+                _ => routes::not_found().await.into_response(),
+            }
+        };
         routes::routes()
             .route_layer(axum::middleware::from_fn_with_state(
                 self.clone(),
@@ -109,7 +163,7 @@ impl Api {
             ))
             .route_layer(axum::middleware::from_fn(metrics::tag))
             .merge(routes::health())
-            .fallback(routes::not_found)
+            .fallback(fallback)
             .method_not_allowed_fallback(routes::method_not_allowed)
             .layer(DefaultBodyLimit::max(self.max_body_bytes))
             .layer(axum::middleware::from_fn_with_state(

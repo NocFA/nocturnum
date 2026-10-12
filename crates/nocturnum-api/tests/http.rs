@@ -1370,3 +1370,58 @@ async fn status_and_recall() {
         }
     }
 }
+
+#[tokio::test]
+async fn the_console_answers_outside_the_api_without_a_key() {
+    use axum::response::IntoResponse;
+    let dir = TempDir::new().unwrap();
+    let api = Api::new(ApiOptions {
+        admin_key: Some(ADMIN.into()),
+        ..ApiOptions::default()
+    });
+    let data = dir.path().to_owned();
+    api.set_registry(
+        tokio::task::spawn_blocking(move || registry(&data))
+            .await
+            .unwrap(),
+    );
+    let console: nocturnum_api::Console =
+        Arc::new(|_, uri, _| format!("console {}", uri.path()).into_response());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let router = api.router_with_console(Some(console));
+    tokio::spawn(async move { axum::serve(listener, router).await });
+    let client = reqwest::Client::new();
+    let get = |path: &str| client.get(format!("{base}{path}")).send();
+
+    for path in ["/", "/collections/notes", "/v1x", "/metricsz"] {
+        let r = get(path).await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK, "{path}");
+        assert_eq!(r.text().await.unwrap(), format!("console {path}"));
+    }
+    // The API keeps its own answers, and still wants the key.
+    for path in ["/v1", "/v1/collections", "/metrics"] {
+        assert_eq!(
+            get(path).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED,
+            "{path}"
+        );
+    }
+    for path in [
+        "/v1/nope",
+        "/v1%2Fcollections",
+        "/%76%31/collections",
+        "/V1/x",
+        "/%6Detrics",
+    ] {
+        let r = get(path).await.unwrap();
+        assert_eq!(r.status(), StatusCode::NOT_FOUND, "{path}");
+        let v: Value = r.json().await.unwrap();
+        assert_eq!(code(&v), "not_found", "{path}");
+    }
+    assert_eq!(get("/livez").await.unwrap().status(), StatusCode::OK);
+    // Without a console every unknown path is the API's 404.
+    let s = start().await;
+    let (status, v) = s.get("/collections/notes").await;
+    assert_eq!((status, code(&v)), (StatusCode::NOT_FOUND, "not_found"));
+}

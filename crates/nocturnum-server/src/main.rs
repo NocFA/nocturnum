@@ -1,6 +1,7 @@
 //! The nocturnum binary, which serves the API and the embedded console on one port.
 
 mod config;
+mod console;
 
 use std::io::IsTerminal;
 use std::process::ExitCode;
@@ -63,6 +64,9 @@ fn serve(config: Config) -> Result<(), String> {
             "listening on http://{}",
             listener.local_addr().unwrap_or(addr)
         );
+        if !console::built() {
+            tracing::warn!("the web console was not built into this binary, see console/README.md");
+        }
         if config.auth.admin_key.is_none() {
             tracing::warn!("no API keys are set, so anyone who can reach {addr} has full access");
         }
@@ -102,7 +106,7 @@ fn serve(config: Config) -> Result<(), String> {
             let _ = done.send(());
             why
         });
-        axum::serve(listener, api.router())
+        axum::serve(listener, api.router_with_console(Some(console::console())))
             .with_graceful_shutdown(async {
                 let _ = finished.await;
             })

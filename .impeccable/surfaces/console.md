@@ -27,7 +27,14 @@ FORM: canon (the standing door, category standard), chosen after previews of the
 
 FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
 
+## Build decisions (2026-10-12)
+
+- Search quality is an ef sweep measured by the engine against exact search, each ef column linking to the Query tab with that ef filled in, which settles the Tuning Specimen question inside this world.
+- The sidebar shows only what the engine backs (Collections, Snapshots, Telemetry, API keys), and Cluster and Logs return once clustering and a log endpoint exist.
+- The header has no Run optimizer action because the optimizer runs on its own and has no trigger endpoint, and no created date because the engine records none, so segment count and disk size stand in.
+- The finish review shipped the 1440x900 Overview, Points, home and Snapshots views, with Query, Telemetry and API keys never captured for it.
+
 ## Unresolved
 
-- Whether the search quality page adopts the Tuning Specimen's live slider interaction inside this world.
+- Ceiling left open by the finish review: budget bars and attention summaries on the collections home, and inline filter and sort controls on the Points tab beside the top search.
 - Light theme: none planned, decide only if asked.
