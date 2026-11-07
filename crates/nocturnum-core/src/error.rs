@@ -12,6 +12,9 @@ pub enum Error {
     #[error("a zero vector has no direction, so it cannot be used with cosine distance")]
     ZeroVector,
 
+    #[error("vector is too long to score without overflowing, its length must stay below 6.5e18")]
+    VectorTooLarge,
+
     #[error("invalid sparse vector: {0}")]
     InvalidSparse(String),
 

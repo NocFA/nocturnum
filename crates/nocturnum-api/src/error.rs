@@ -127,6 +127,7 @@ impl From<nocturnum_core::Error> for ApiError {
             E::DimensionMismatch { .. }
             | E::NonFiniteVector { .. }
             | E::ZeroVector
+            | E::VectorTooLarge
             | E::InvalidSparse(_) => {
                 ApiError::new(StatusCode::BAD_REQUEST, "invalid_vector", message)
             }

@@ -1,0 +1,11 @@
+nocturnum
+Copyright 2026 the nocturnum authors
+
+This product is licensed under the Apache License, Version 2.0, found in LICENSE.
+
+nocturnum is an independent implementation, written after studying the source and
+documentation of Qdrant (https://github.com/qdrant/qdrant), which is also licensed under
+the Apache License, Version 2.0. No Qdrant code is copied into this repository, and the
+study notes in docs/research/ cite Qdrant's files by path and line for reference only.
+
+Qdrant is a trademark of Qdrant Solutions GmbH, and nocturnum is not affiliated with it.

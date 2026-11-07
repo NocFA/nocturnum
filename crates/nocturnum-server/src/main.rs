@@ -26,6 +26,13 @@ fn main() -> ExitCode {
         print!("{}", config.redacted());
         return ExitCode::SUCCESS;
     }
+    // Data, WAL and snapshot files hold everything stored, so only this user may read the
+    // files and directories the server creates.
+    #[cfg(unix)]
+    // SAFETY: umask only swaps the process's file-creation mask and cannot fail.
+    unsafe {
+        libc::umask(0o077);
+    }
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::new(&config.log.level))
         .with_ansi(std::io::stdout().is_terminal())
@@ -74,6 +81,11 @@ fn serve(config: Config) -> Result<(), String> {
         }
         if config.auth.admin_key.is_none() {
             tracing::warn!("no API keys are set, so anyone who can reach {addr} has full access");
+        } else if !addr.ip().is_loopback() {
+            tracing::warn!(
+                "API keys cross the network in plain HTTP on {addr}, so keep this port on an \
+                 encrypted network such as a tailnet or put a TLS proxy in front of it"
+            );
         }
 
         // Collections load after binding, so health checks answer during a long recovery.

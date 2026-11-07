@@ -1,0 +1,49 @@
+name: Test
+
+# Runs on pushes to main only, so no code from a fork ever runs on the runner.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: nocturnum-test
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: linux-amd64
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Fetch the triggering commit
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.sha }}
+          URL: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "$URL" 2>/dev/null || git remote set-url origin "$URL"
+          auth=$(printf 'x-access-token:%s' "$TOKEN" | base64 | tr -d '\n')
+          git -c http.extraHeader="Authorization: basic $auth" fetch --no-tags --depth=1 origin "$SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$SHA"
+
+      - name: Put cargo on the PATH
+        run: |
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/cargo" --version
+          node --version
+
+      - name: Build the console
+        run: npm --prefix console ci && npm --prefix console run build
+
+      # The runner shares its box with other services, so builds take four jobs at most.
+      - name: Test
+        run: cargo test --workspace --locked -j 4
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -j 4 -- -D warnings

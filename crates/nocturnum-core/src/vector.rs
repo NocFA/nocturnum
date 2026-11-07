@@ -12,6 +12,10 @@ use crate::error::{Error, Result};
 /// A dense vector of 32-bit floats.
 pub type DenseVector = Vec<f32>;
 
+/// The largest squared length a vector may have under dot, euclid or manhattan, so that no
+/// score between two stored or query vectors overflows f32 and ties them at infinity.
+pub const MAX_SQUARED_NORM: f32 = f32::MAX / 8.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Distance {
@@ -49,11 +53,21 @@ impl Distance {
         if let Some(index) = vector.iter().position(|x| !x.is_finite()) {
             return Err(Error::NonFiniteVector { index });
         }
+        let squared_norm = dot(vector, vector);
         if self != Distance::Cosine {
+            // Every score between two vectors under this bound stays finite: a dot product is
+            // at most the product of the lengths and a squared distance at most the square of
+            // their sum, so both stay within 4 * MAX_SQUARED_NORM, half of f32::MAX.
+            if squared_norm > MAX_SQUARED_NORM {
+                return Err(Error::VectorTooLarge);
+            }
             return Ok(None);
         }
-        let norm = dot(vector, vector).sqrt();
-        if norm == 0.0 || !norm.is_finite() {
+        if !squared_norm.is_finite() {
+            return Err(Error::VectorTooLarge);
+        }
+        let norm = squared_norm.sqrt();
+        if norm == 0.0 {
             return Err(Error::ZeroVector);
         }
         Ok(Some(norm))
@@ -185,6 +199,28 @@ mod tests {
             Distance::Euclid.prepare(1, vec![f32::INFINITY]),
             Err(Error::NonFiniteVector { index: 0 })
         );
+    }
+
+    #[test]
+    fn prepare_refuses_vectors_whose_scores_would_overflow() {
+        // 2e20 squared overflows f32, which used to tie [2e20] and [1e20] at infinity
+        // from [0] and rank the farther one first.
+        for distance in [Distance::Dot, Distance::Euclid, Distance::Manhattan] {
+            assert_eq!(distance.prepare(1, vec![2e20]), Err(Error::VectorTooLarge));
+        }
+        assert_eq!(
+            Distance::Cosine.prepare(2, vec![3e38, 3e38]),
+            Err(Error::VectorTooLarge)
+        );
+        // The largest allowed lengths still score finite against each other.
+        let edge = MAX_SQUARED_NORM.sqrt() * 0.999;
+        for distance in [Distance::Dot, Distance::Euclid, Distance::Manhattan] {
+            let a = distance.prepare(1, vec![edge]).unwrap();
+            let b = distance.prepare(1, vec![-edge]).unwrap();
+            assert!(distance.score(&a, &b).is_finite(), "{distance:?}");
+            assert!(distance.score(&a, &a).is_finite(), "{distance:?}");
+        }
+        assert!(Distance::Euclid.prepare(1, vec![1e18]).is_ok());
     }
 
     #[test]

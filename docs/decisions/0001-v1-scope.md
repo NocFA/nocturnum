@@ -41,13 +41,13 @@ On macOS a plain `fsync` does not reach the platter or flash, so `durable` uses 
 
 One request is one WAL record, so a batch inside a single request is all or nothing after a crash, while separate requests are independent.
 
-Every row of that table is a tested claim: crash and fault-injection tests prove each level before the docs or the API promise it (AGENTS.md rule 4).
+Every row of that table is a tested claim: crash and fault-injection tests prove each level before the docs or the API promise it.
 
 ## Ports: 6333 and 6334
 
-REST and the console listen on 6333, gRPC on 6334, the same numbers Qdrant uses.
+REST and the console listen on 6333, and gRPC takes 6334 once it lands, the same numbers Qdrant uses.
 
-Both bind to loopback by default and need an explicit setting to listen elsewhere so the console is reached at a tailnet name such as `http://my-server:6333/` once the bind is opened to the tailnet.
+Both bind to loopback by default and need an explicit setting to listen elsewhere, so the console is reached at a tailnet name such as `http://my-server:6333/` once the bind is opened to the tailnet.
 
 A Qdrant client pointed at nocturnum gets clear errors rather than silent misbehaviour, because the API differs, and running nocturnum beside a Qdrant on the same box means changing one of them.
 

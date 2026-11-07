@@ -1,6 +1,6 @@
 # Durability: what is promised and what is tested
 
-nocturnum promises three acknowledgement levels for writes, set out in [`../decisions/0001-v1-scope.md`](../decisions/0001-v1-scope.md), and AGENTS.md rule 4 says every such promise needs a test behind it.
+nocturnum promises three acknowledgement levels for writes, set out in [`../decisions/0001-v1-scope.md`](../decisions/0001-v1-scope.md), and the project rule is that every such promise has a test behind it.
 
 This page says which tests stand behind each promise, and which parts rest on the operating system and the drive rather than on anything a test on one machine can show.
 

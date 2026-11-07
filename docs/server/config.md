@@ -90,6 +90,9 @@ allowed_hosts = ["my-server", "my-server.your-tailnet.ts.net"]
 allow_anonymous = true
 ```
 
+The server speaks plain HTTP, so keys cross the network as readable text, and anyone who can watch the traffic can take the admin key.
+A tailnet encrypts it underneath, while on a LAN or the internet a TLS proxy such as Caddy belongs in front, and the server logs a warning at startup whenever keys are set on an address that isn't loopback.
+
 ## The data directory
 
 ```text
@@ -101,6 +104,8 @@ data/
     LOCK                       held while a server runs, so two servers never prune each other's
     <name>/                    <name>-<milliseconds>.snapshot and its .sha256
 ```
+
+The server creates every file and directory readable by its own user only (a umask of `077`), since they hold everything stored, so a backup tool reading them runs as the same user or as root.
 
 Snapshots can go on another disk with `storage.snapshots_path`, which keeps a backup when the data disk dies, and it must lie outside `collections/`.
 Restoring copies from there into the data directory, so the two can be on different filesystems.

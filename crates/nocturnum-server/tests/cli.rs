@@ -75,6 +75,23 @@ fn serves_and_stops_cleanly_on_sigterm() {
     stream.read_to_string(&mut reply).unwrap();
     assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
 
+    assert!(
+        lines.any(|l| l.unwrap().contains("ready")),
+        "the server loaded its collections"
+    );
+    let body = r#"{"vectors": {"dim": 2, "distance": "dot"}}"#;
+    let mut stream = TcpStream::connect(&addr).unwrap();
+    write!(
+        stream,
+        "PUT /v1/collections/c HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut reply = String::new();
+    stream.read_to_string(&mut reply).unwrap();
+    assert!(reply.starts_with("HTTP/1.1 2"), "{reply}");
+
     let status = Command::new("kill")
         .args(["-TERM", &child.id().to_string()])
         .status()
@@ -83,4 +100,25 @@ fn serves_and_stops_cleanly_on_sigterm() {
     let exit = child.wait().unwrap();
     assert!(exit.success(), "{exit:?}");
     assert!(lines.any(|l| l.unwrap().contains("shutting down")));
+
+    // The server's umask keeps what it writes private to its own user.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut seen = 0;
+        let mut stack: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        while let Some(path) = stack.pop() {
+            let meta = std::fs::metadata(&path).unwrap();
+            let mode = meta.permissions().mode() & 0o777;
+            assert_eq!(mode & 0o077, 0, "{} has mode {mode:o}", path.display());
+            seen += 1;
+            if meta.is_dir() {
+                stack.extend(std::fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
+            }
+        }
+        assert!(seen > 1, "the server wrote no files");
+    }
 }

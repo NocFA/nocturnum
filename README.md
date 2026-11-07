@@ -25,7 +25,7 @@ Think of a self-hosted take on [Qdrant](https://qdrant.tech/), rebuilt from scra
 - **Access:** admin and read-only keys, loopback by default, and protection against DNS rebinding and cross-site requests when no keys are set.
 - **Operations:** `/livez`, `/readyz`, Prometheus `/metrics`, engine status per collection, a time limit on searches and a cap on reads running at once, so a burst of searches leaves threads free for writes, and a clean shutdown on SIGINT or SIGTERM.
 
-The engine, the REST server and the console run end to end, with 305 tests passing on macOS and Linux, crash tests included.
+The engine, the REST server and the console run end to end, with 306 tests passing on macOS and Linux, crash tests included.
 
 The console comes with the binary on the same port, for browsing collections, points and payloads, running queries, checking search quality, taking, restoring and scheduling snapshots, watching the engine work and setting keys, with `j` and `k` stepping through points beside their JSON.
 
@@ -404,6 +404,12 @@ Clustering is out of v1, though shard ids are in the on-disk format already so i
 | [`docs/decisions/`](docs/decisions/) | the decisions behind v1's scope, storage layout and payload indexes |
 | [`docs/index/hnsw.md`](docs/index/hnsw.md) | how the HNSW graphs are built and searched |
 | [`docs/how-qdrant-works.md`](docs/how-qdrant-works.md) | the study of Qdrant this project started from, with the detailed reports in [`docs/research/`](docs/research/) |
+
+## Contributing
+
+nocturnum is a personal project in its 0.x releases, so the API and the on-disk format can still change between them, each change with a note on how to move your data.
+
+Issues are open on the [GitHub mirror](https://github.com/NocFA/nocturnum/issues), [`CONTRIBUTING.md`](CONTRIBUTING.md) covers building, testing and sending changes, and [`SECURITY.md`](SECURITY.md) says how to report a vulnerability privately.
 
 ## Licence
 
